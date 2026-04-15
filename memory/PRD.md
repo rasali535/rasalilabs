@@ -53,16 +53,15 @@ Autonomous AI Company Workflow Engine with Boardroom and Agent Dialogue. A local
 
 ## Prioritized Backlog
 ### P0 (Critical - Next)
-- Real Ollama integration testing (when user has Ollama running locally)
+- None — core MVP is complete
 
 ### P1 (Important)
 - MP4/MPEG media generation pipeline
-- Real-time WebSocket updates for chat messages too
 - Meeting minutes auto-generation and export
 - Budget alerts and thresholds (CFO approval triggers)
+- Agent lifecycle management (HR activation/deactivation)
 
 ### P2 (Nice to Have)
-- Agent activation/deactivation (HR controls)
 - Override and kill-switch controls
 - Audit trail and decision log views
 - Boardroom analytics and decision insights
@@ -70,8 +69,7 @@ Autonomous AI Company Workflow Engine with Boardroom and Agent Dialogue. A local
 - Meeting scheduling and calendar integration
 
 ## Next Tasks
-1. Implement real Ollama integration with live model switching
-2. Add MP4/MPEG media generation pipeline
-3. Build meeting minutes export functionality
-4. Add budget alerts and CFO approval thresholds
-5. Implement agent lifecycle management (HR controls)
+1. Add MP4/MPEG media generation pipeline
+2. Build meeting minutes export functionality
+3. Add budget alerts and CFO approval thresholds
+4. Implement agent lifecycle management (HR controls)
