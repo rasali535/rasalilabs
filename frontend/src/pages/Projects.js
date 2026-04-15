@@ -24,7 +24,7 @@ import {
   AGENT_META,
 } from "@/lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AgentAvatar from "@/components/AgentAvatar";
 import TaskCard from "@/components/TaskCard";
@@ -408,6 +408,9 @@ export default function Projects() {
             <DialogTitle className="font-['Chivo'] text-sm font-bold tracking-tight">
               {previewArtifact?.name}
             </DialogTitle>
+            <DialogDescription className="text-xs text-zinc-500">
+              Artifact type: {previewArtifact?.artifact_type}
+            </DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-[60vh]">
             {previewArtifact?.artifact_type === "html" ? (

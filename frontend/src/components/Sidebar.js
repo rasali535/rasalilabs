@@ -36,10 +36,10 @@ export default function Sidebar() {
           <Zap className="w-4 h-4 text-white" />
         </div>
         <span
-          className="font-['Chivo'] text-sm font-bold tracking-tight text-white"
+          className="font-['Chivo'] text-xs font-bold tracking-widest text-white uppercase"
           data-testid="app-logo-text"
         >
-          AI COMPANY
+          Ras Ali Labs
         </span>
       </div>
 

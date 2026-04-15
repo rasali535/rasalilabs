@@ -21,8 +21,8 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
+db = client[os.environ.get('DB_NAME', 'rasalilabs')]
 
 OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 LLAMA_MODEL = os.environ.get('LLAMA_MODEL', 'llama3.2')
@@ -41,6 +41,22 @@ model_config = {
 _ollama_cache = {"available": None, "checked_at": 0, "models": []}
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:12000",
+        "http://127.0.0.1:12000",
+        "http://localhost:12001",
+        "http://127.0.0.1:12001",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -263,7 +279,7 @@ class ConnectionManager:
 ws_manager = ConnectionManager()
 
 # Artifacts directory
-ARTIFACTS_DIR = Path("/app/artifacts")
+ARTIFACTS_DIR = ROOT_DIR / "artifacts_output"
 ARTIFACTS_DIR.mkdir(exist_ok=True)
 
 # ─── Agent Registry ───
@@ -271,7 +287,7 @@ AGENTS = {
     "ceo": {
         "id": "agent-ceo",
         "role": "ceo",
-        "name": "Atlas",
+        "name": "Ivy",
         "title": "Chief Executive Officer",
         "status": "active",
         "skills": ["strategy", "leadership", "planning", "delegation"],
@@ -1611,14 +1627,14 @@ async def websocket_endpoint(websocket: WebSocket, project_id: str):
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket, project_id)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS is handled at the top of the file to ensure it captures all requests.
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
+
+if __name__ == "__main__":
+    import uvicorn
+    import os
+    port = int(os.environ.get("PORT", 12000))
+    uvicorn.run(app, host="0.0.0.0", port=port)

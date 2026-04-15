@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { getStats, getProjects, createProject, getAgents, AGENT_META } from "@/lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import AgentAvatar from "@/components/AgentAvatar";
 
@@ -80,7 +80,7 @@ export default function Dashboard() {
             Command Center
           </h1>
           <p className="text-xs text-zinc-500 mt-0.5 font-mono uppercase tracking-wider">
-            Autonomous AI Company Engine
+            Ras Ali Labs | AI Workflow Engine
           </p>
         </div>
         <button
@@ -206,7 +206,9 @@ export default function Dashboard() {
             <DialogTitle className="font-['Chivo'] text-lg font-bold tracking-tight">
               New Project Goal
             </DialogTitle>
-            <p className="text-xs text-zinc-500">Submit a business objective for your AI company to work on.</p>
+            <DialogDescription className="text-xs text-zinc-500">
+              Submit a business objective for the labs to execute.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div>

@@ -72,7 +72,7 @@ export const getWsUrl = (projectId) => {
 };
 
 export const AGENT_META = {
-  ceo: { name: "Atlas", title: "CEO", color: "#FFFFFF", icon: "Crown" },
+  ceo: { name: "Ivy", title: "CEO", color: "#FFFFFF", icon: "Crown" },
   cfo: { name: "Meridian", title: "CFO", color: "#FFD700", icon: "DollarSign" },
   hr: { name: "Harmony", title: "HR", color: "#F472B6", icon: "Users" },
   ux: { name: "Prism", title: "UI/UX", color: "#A78BFA", icon: "Palette" },
