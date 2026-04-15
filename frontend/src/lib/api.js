@@ -1,0 +1,59 @@
+import axios from "axios";
+
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const API = `${BACKEND_URL}/api`;
+
+const api = axios.create({ baseURL: API });
+
+// ─── Health ───
+export const getHealth = () => api.get("/health").then(r => r.data);
+export const getStats = () => api.get("/stats").then(r => r.data);
+
+// ─── Agents ───
+export const getAgents = () => api.get("/agents").then(r => r.data);
+export const getAgent = (role) => api.get(`/agents/${role}`).then(r => r.data);
+
+// ─── Projects ───
+export const createProject = (data) => api.post("/projects", data).then(r => r.data);
+export const getProjects = () => api.get("/projects").then(r => r.data);
+export const getProject = (id) => api.get(`/projects/${id}`).then(r => r.data);
+
+// ─── Meetings ───
+export const createMeeting = (data) => api.post("/meetings", data).then(r => r.data);
+export const getMeetings = (projectId) => api.get("/meetings", { params: projectId ? { project_id: projectId } : {} }).then(r => r.data);
+export const getMeeting = (id) => api.get(`/meetings/${id}`).then(r => r.data);
+
+// ─── Tasks ───
+export const createTask = (data) => api.post("/tasks", data).then(r => r.data);
+export const getTasks = (params) => api.get("/tasks", { params }).then(r => r.data);
+export const updateTask = (id, data) => api.patch(`/tasks/${id}`, data).then(r => r.data);
+
+// ─── Messages ───
+export const sendMessage = (data) => api.post("/messages", data).then(r => r.data);
+export const getMessages = (params) => api.get("/messages", { params }).then(r => r.data);
+export const getThreads = (projectId) => api.get("/threads", { params: projectId ? { project_id: projectId } : {} }).then(r => r.data);
+
+// ─── Decisions ───
+export const createDecision = (data) => api.post("/decisions", data).then(r => r.data);
+export const getDecisions = (params) => api.get("/decisions", { params }).then(r => r.data);
+export const voteDecision = (id, data) => api.post(`/decisions/${id}/vote`, data).then(r => r.data);
+
+// ─── Artifacts ───
+export const getArtifacts = (projectId) => api.get("/artifacts", { params: projectId ? { project_id: projectId } : {} }).then(r => r.data);
+export const getArtifact = (id) => api.get(`/artifacts/${id}`).then(r => r.data);
+
+// ─── Execution ───
+export const executeProject = (projectId) => api.post("/execute", { project_id: projectId }).then(r => r.data);
+
+export const AGENT_META = {
+  ceo: { name: "Atlas", title: "CEO", color: "#FFFFFF", icon: "Crown" },
+  cfo: { name: "Meridian", title: "CFO", color: "#FFD700", icon: "DollarSign" },
+  hr: { name: "Harmony", title: "HR", color: "#F472B6", icon: "Users" },
+  ux: { name: "Prism", title: "UI/UX", color: "#A78BFA", icon: "Palette" },
+  developer: { name: "Cipher", title: "Developer", color: "#38BDF8", icon: "Code" },
+  frontend: { name: "Pixel", title: "Frontend", color: "#38BDF8", icon: "Monitor" },
+  backend: { name: "Forge", title: "Backend", color: "#F97316", icon: "Server" },
+  devops: { name: "Sentinel", title: "DevOps", color: "#22C55E", icon: "Terminal" },
+};
+
+export default api;
