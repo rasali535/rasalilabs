@@ -206,6 +206,7 @@ export default function Dashboard() {
             <DialogTitle className="font-['Chivo'] text-lg font-bold tracking-tight">
               New Project Goal
             </DialogTitle>
+            <p className="text-xs text-zinc-500">Submit a business objective for your AI company to work on.</p>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div>
