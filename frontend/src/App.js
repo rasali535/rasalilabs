@@ -11,6 +11,7 @@ import Delegation from "@/pages/Delegation";
 import Approvals from "@/pages/Approvals";
 import Projects from "@/pages/Projects";
 import Budget from "@/pages/Budget";
+import Models from "@/pages/Models";
 
 function App() {
   return (
@@ -26,6 +27,7 @@ function App() {
             <Route path="/approvals" element={<Approvals />} />
             <Route path="/projects" element={<Projects />} />
             <Route path="/budget" element={<Budget />} />
+            <Route path="/models" element={<Models />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>

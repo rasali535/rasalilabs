@@ -28,11 +28,39 @@ OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 LLAMA_MODEL = os.environ.get('LLAMA_MODEL', 'llama3.2')
 QWEN_MODEL = os.environ.get('QWEN_MODEL', 'qwen2.5-coder')
 
+# ─── Model Routing Config (mutable at runtime) ───
+model_config = {
+    "ollama_url": OLLAMA_URL,
+    "reasoning_model": LLAMA_MODEL,
+    "coding_model": QWEN_MODEL,
+    "role_overrides": {},  # e.g. {"cfo": "mistral"} to override per-role
+    "mode": "auto",  # "auto" | "llama_only" | "qwen_only" | "simulation"
+}
+
+# Cache for Ollama availability
+_ollama_cache = {"available": None, "checked_at": 0, "models": []}
+
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+@app.on_event("startup")
+async def load_model_config():
+    """Load persisted model config from MongoDB."""
+    try:
+        doc = await db.system_config.find_one({"key": "model_config"}, {"_id": 0})
+        if doc and "value" in doc:
+            stored = doc["value"]
+            model_config["ollama_url"] = stored.get("ollama_url", model_config["ollama_url"])
+            model_config["reasoning_model"] = stored.get("reasoning_model", model_config["reasoning_model"])
+            model_config["coding_model"] = stored.get("coding_model", model_config["coding_model"])
+            model_config["mode"] = stored.get("mode", model_config["mode"])
+            model_config["role_overrides"] = stored.get("role_overrides", {})
+            logger.info(f"Loaded model config: mode={model_config['mode']}, reasoning={model_config['reasoning_model']}, coding={model_config['coding_model']}")
+    except Exception as e:
+        logger.warning(f"Failed to load model config: {e}")
 
 # ─── Enums ───
 class AgentRole(str, Enum):
@@ -156,6 +184,8 @@ class MessageOut(BaseModel):
     to_agent: Optional[str] = None
     content: str
     thread_type: str
+    model_used: Optional[str] = None
+    model_mode: Optional[str] = None
     created_at: str
 
 class DecisionCreate(BaseModel):
@@ -321,13 +351,65 @@ AGENTS = {
 }
 
 # ─── Ollama / LLM Service ───
+import time as _time
+
 async def check_ollama_available():
+    """Check Ollama with 10s cache to avoid hammering."""
+    now = _time.time()
+    if _ollama_cache["available"] is not None and (now - _ollama_cache["checked_at"]) < 10:
+        return _ollama_cache["available"]
     try:
         async with httpx.AsyncClient(timeout=3.0) as c:
-            r = await c.get(f"{OLLAMA_URL}/api/tags")
-            return r.status_code == 200
+            r = await c.get(f"{model_config['ollama_url']}/api/tags")
+            if r.status_code == 200:
+                data = r.json()
+                _ollama_cache["models"] = [m["name"] for m in data.get("models", [])]
+                _ollama_cache["available"] = True
+                _ollama_cache["checked_at"] = now
+                return True
     except Exception:
-        return False
+        pass
+    _ollama_cache["available"] = False
+    _ollama_cache["checked_at"] = now
+    _ollama_cache["models"] = []
+    return False
+
+async def list_ollama_models():
+    """Fetch available models from Ollama."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.get(f"{model_config['ollama_url']}/api/tags")
+            if r.status_code == 200:
+                return r.json().get("models", [])
+    except Exception:
+        pass
+    return []
+
+def resolve_model_for(role: str, task_type: str) -> tuple:
+    """Determine which model to use for a given role+task_type.
+    Returns (model_name, routing_reason)."""
+    # Check per-role overrides first
+    if role in model_config.get("role_overrides", {}):
+        return model_config["role_overrides"][role], f"role_override:{role}"
+
+    mode = model_config.get("mode", "auto")
+    if mode == "simulation":
+        return "simulation", "forced_simulation"
+    if mode == "llama_only":
+        return model_config["reasoning_model"], "llama_only_mode"
+    if mode == "qwen_only":
+        return model_config["coding_model"], "qwen_only_mode"
+
+    # Auto mode: route by role and task
+    coding_roles = {"developer", "frontend", "backend"}
+    coding_tasks = {"code", "implementation", "debug", "test"}
+
+    if role in coding_roles and task_type in coding_tasks:
+        return model_config["coding_model"], f"auto:coding({role}/{task_type})"
+    if task_type in coding_tasks:
+        return model_config["coding_model"], f"auto:coding_task({task_type})"
+
+    return model_config["reasoning_model"], f"auto:reasoning({role}/{task_type})"
 
 SIMULATION_RESPONSES = {
     "ceo": {
@@ -389,31 +471,46 @@ USER_CHAT_RESPONSES = {
     "devops": "Hi! I'm the DevOps engineer. I manage deployments, CI/CD pipelines, Docker, and infrastructure. I can discuss deployment strategies, monitoring, or system reliability. What ops topic do you need help with?",
 }
 
-async def get_agent_response(role: str, context: str, task_type: str = "default") -> str:
-    """Get response from Ollama or simulation."""
+async def get_agent_response(role: str, context: str, task_type: str = "default") -> dict:
+    """Get response from Ollama or simulation.
+    Returns {"content": str, "model": str, "routing": str, "mode": str}"""
+    model_name, routing_reason = resolve_model_for(role, task_type)
+
+    # Forced simulation mode
+    if model_name == "simulation":
+        text = _get_simulation_text(role, task_type)
+        return {"content": text, "model": "simulation", "routing": routing_reason, "mode": "simulation"}
+
     ollama_available = await check_ollama_available()
-    
+
     if ollama_available:
         try:
             agent = AGENTS.get(role, AGENTS["developer"])
-            system_prompt = f"You are {agent['name']}, the {agent['title']} of an AI company. {agent['description']} Respond concisely and in-character. Keep responses under 3 sentences."
-            
-            model = LLAMA_MODEL
-            if role in ["developer", "frontend", "backend"] and task_type == "code":
-                model = QWEN_MODEL
-            
-            async with httpx.AsyncClient(timeout=30.0) as c:
-                r = await c.post(f"{OLLAMA_URL}/api/generate", json={
-                    "model": model,
+            system_prompt = (
+                f"You are {agent['name']}, the {agent['title']} of an AI company. "
+                f"{agent['description']} Respond concisely and in-character. "
+                f"Keep responses under 3 sentences."
+            )
+
+            async with httpx.AsyncClient(timeout=60.0) as c:
+                r = await c.post(f"{model_config['ollama_url']}/api/generate", json={
+                    "model": model_name,
                     "prompt": f"{system_prompt}\n\nContext: {context}\n\nRespond:",
                     "stream": False
                 })
                 if r.status_code == 200:
-                    return r.json().get("response", "").strip()
+                    text = r.json().get("response", "").strip()
+                    if text:
+                        return {"content": text, "model": model_name, "routing": routing_reason, "mode": "live"}
         except Exception as e:
-            logger.warning(f"Ollama call failed for {role}: {e}")
-    
-    # Simulation fallback
+            logger.warning(f"Ollama call failed for {role} using {model_name}: {e}")
+
+    # Fallback to simulation
+    text = _get_simulation_text(role, task_type)
+    return {"content": text, "model": "simulation", "routing": routing_reason, "mode": "simulation"}
+
+
+def _get_simulation_text(role: str, task_type: str) -> str:
     role_responses = SIMULATION_RESPONSES.get(role, SIMULATION_RESPONSES["developer"])
     return role_responses.get(task_type, role_responses.get("default", "Acknowledged. I'll proceed with my assigned responsibilities."))
 
@@ -451,7 +548,7 @@ async def run_kickoff_meeting(project_id: str, goal: str, output_format: str):
     messages = []
     for i, role in enumerate(dialogue_order):
         context = f"Project goal: {goal}. Output format: {output_format}. This is a kickoff meeting. Previous discussion: {'; '.join([m['content'][:80] for m in messages[-3:]])}"
-        content = await get_agent_response(role, context, "kickoff")
+        result = await get_agent_response(role, context, "kickoff")
         
         msg = {
             "id": str(uuid.uuid4()),
@@ -460,8 +557,10 @@ async def run_kickoff_meeting(project_id: str, goal: str, output_format: str):
             "meeting_id": meeting_id,
             "from_agent": role,
             "to_agent": None,
-            "content": content,
+            "content": result["content"],
             "thread_type": "cross_functional",
+            "model_used": result["model"],
+            "model_mode": result["mode"],
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         messages.append(msg)
@@ -570,8 +669,10 @@ async def execute_project(project_id: str):
             "meeting_id": None,
             "from_agent": role,
             "to_agent": None,
-            "content": f"[Task: {task['title']}] {response}",
+            "content": f"[Task: {task['title']}] {response['content']}",
             "thread_type": "direct",
+            "model_used": response["model"],
+            "model_mode": response["mode"],
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.messages.insert_one(msg)
@@ -582,7 +683,7 @@ async def execute_project(project_id: str):
         
         await db.tasks.update_one(
             {"id": task["id"]},
-            {"$set": {"status": "completed", "output": response}}
+            {"$set": {"status": "completed", "output": response["content"]}}
         )
         await asyncio.sleep(0.05)
     
@@ -838,9 +939,11 @@ async def health():
     return {
         "status": "healthy",
         "ollama_available": ollama_ok,
-        "mode": "live" if ollama_ok else "simulation",
-        "llama_model": LLAMA_MODEL,
-        "qwen_model": QWEN_MODEL
+        "mode": model_config["mode"] if model_config["mode"] != "auto" else ("live" if ollama_ok else "simulation"),
+        "reasoning_model": model_config["reasoning_model"],
+        "coding_model": model_config["coding_model"],
+        "routing_mode": model_config["mode"],
+        "cached_models": _ollama_cache.get("models", []),
     }
 
 # ─── Agents ───
@@ -1131,6 +1234,128 @@ async def get_stats():
         "agents_active": len([a for a in AGENTS.values() if a["status"] == "active"])
     }
 
+# ─── Model Management ───
+class ModelConfigUpdate(BaseModel):
+    reasoning_model: Optional[str] = None
+    coding_model: Optional[str] = None
+    ollama_url: Optional[str] = None
+    mode: Optional[str] = None  # auto | llama_only | qwen_only | simulation
+    role_overrides: Optional[Dict[str, str]] = None
+
+class ModelPullRequest(BaseModel):
+    model_name: str
+
+@api_router.get("/models")
+async def get_models():
+    """Get model config and available Ollama models."""
+    ollama_ok = await check_ollama_available()
+    available_models = await list_ollama_models() if ollama_ok else []
+
+    # Build routing table showing what each agent will use
+    routing_table = {}
+    for role in AGENTS:
+        for task_type in ["default", "code", "chat", "kickoff"]:
+            model_name, reason = resolve_model_for(role, task_type)
+            if role not in routing_table:
+                routing_table[role] = {}
+            routing_table[role][task_type] = {"model": model_name, "reason": reason}
+
+    return {
+        "config": {
+            "ollama_url": model_config["ollama_url"],
+            "reasoning_model": model_config["reasoning_model"],
+            "coding_model": model_config["coding_model"],
+            "mode": model_config["mode"],
+            "role_overrides": model_config.get("role_overrides", {}),
+        },
+        "ollama_available": ollama_ok,
+        "available_models": [
+            {
+                "name": m.get("name", ""),
+                "size": m.get("size", 0),
+                "modified_at": m.get("modified_at", ""),
+                "digest": m.get("digest", "")[:12],
+            }
+            for m in available_models
+        ],
+        "routing_table": routing_table,
+        "cached_models": _ollama_cache.get("models", []),
+    }
+
+@api_router.post("/models/config")
+async def update_model_config(req: ModelConfigUpdate):
+    """Update model routing configuration."""
+    if req.reasoning_model is not None:
+        model_config["reasoning_model"] = req.reasoning_model
+    if req.coding_model is not None:
+        model_config["coding_model"] = req.coding_model
+    if req.ollama_url is not None:
+        model_config["ollama_url"] = req.ollama_url
+        _ollama_cache["available"] = None  # reset cache
+    if req.mode is not None:
+        if req.mode not in ("auto", "llama_only", "qwen_only", "simulation"):
+            raise HTTPException(400, "mode must be: auto, llama_only, qwen_only, or simulation")
+        model_config["mode"] = req.mode
+    if req.role_overrides is not None:
+        model_config["role_overrides"] = req.role_overrides
+
+    # Persist to MongoDB
+    await db.system_config.update_one(
+        {"key": "model_config"},
+        {"$set": {"key": "model_config", "value": model_config}},
+        upsert=True,
+    )
+
+    return {"status": "updated", "config": model_config}
+
+@api_router.post("/models/pull")
+async def pull_model(req: ModelPullRequest):
+    """Trigger an Ollama model pull (async)."""
+    ollama_ok = await check_ollama_available()
+    if not ollama_ok:
+        raise HTTPException(503, "Ollama is not available")
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.post(
+                f"{model_config['ollama_url']}/api/pull",
+                json={"name": req.model_name, "stream": False},
+            )
+            if r.status_code == 200:
+                _ollama_cache["available"] = None  # reset cache
+                return {"status": "pull_started", "model": req.model_name}
+            return {"status": "error", "detail": r.text}
+    except httpx.TimeoutException:
+        # Pull takes time, that's OK
+        return {"status": "pull_started", "model": req.model_name, "note": "Pull in progress (may take minutes)"}
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+@api_router.get("/models/test/{model_name}")
+async def test_model(model_name: str):
+    """Quick test a specific model with a simple prompt."""
+    ollama_ok = await check_ollama_available()
+    if not ollama_ok:
+        return {"status": "error", "detail": "Ollama not available", "mode": "simulation"}
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.post(f"{model_config['ollama_url']}/api/generate", json={
+                "model": model_name,
+                "prompt": "Say hello in one sentence.",
+                "stream": False
+            })
+            if r.status_code == 200:
+                resp = r.json()
+                return {
+                    "status": "ok",
+                    "model": model_name,
+                    "response": resp.get("response", "").strip()[:200],
+                    "total_duration_ms": resp.get("total_duration", 0) / 1_000_000,
+                    "eval_count": resp.get("eval_count", 0),
+                }
+            return {"status": "error", "detail": f"HTTP {r.status_code}: {r.text[:200]}"}
+    except Exception as e:
+        return {"status": "error", "detail": str(e)[:200], "model": model_name}
+
 # ─── User Chat with Agents ───
 @api_router.post("/chat")
 async def user_chat(req: UserChatRequest):
@@ -1155,32 +1380,20 @@ async def user_chat(req: UserChatRequest):
     await db.messages.insert_one(user_msg)
     
     # Generate agent response
-    agent = AGENTS[req.to_agent]
     context = f"A user is directly messaging you. Their message: {req.content}"
     if req.project_id:
         project = await db.projects.find_one({"id": req.project_id}, {"_id": 0})
         if project:
             context += f"\nProject context: {project['goal']}"
     
-    # Try Ollama first, fall back to simulation
-    ollama_available = await check_ollama_available()
-    if ollama_available:
-        try:
-            system_prompt = f"You are {agent['name']}, the {agent['title']}. {agent['description']} Respond helpfully and in-character. Keep responses concise (2-4 sentences)."
-            async with httpx.AsyncClient(timeout=30.0) as c:
-                r = await c.post(f"{OLLAMA_URL}/api/generate", json={
-                    "model": LLAMA_MODEL,
-                    "prompt": f"{system_prompt}\n\nUser message: {req.content}\n\nRespond:",
-                    "stream": False
-                })
-                if r.status_code == 200:
-                    response_text = r.json().get("response", "").strip()
-                else:
-                    response_text = USER_CHAT_RESPONSES.get(req.to_agent, "I'll look into that for you.")
-        except Exception:
-            response_text = USER_CHAT_RESPONSES.get(req.to_agent, "I'll look into that for you.")
-    else:
-        response_text = USER_CHAT_RESPONSES.get(req.to_agent, "I'll look into that for you.")
+    # Generate agent response using the model routing system
+    result = await get_agent_response(req.to_agent, context, "chat")
+    response_text = result["content"]
+    # If simulation and we have a better chat-specific template, use it
+    if result["mode"] == "simulation":
+        chat_text = USER_CHAT_RESPONSES.get(req.to_agent)
+        if chat_text:
+            response_text = chat_text
     
     # Store agent response
     agent_msg = {
@@ -1192,6 +1405,8 @@ async def user_chat(req: UserChatRequest):
         "to_agent": "user",
         "content": response_text,
         "thread_type": "direct",
+        "model_used": result["model"],
+        "model_mode": result["mode"],
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     await db.messages.insert_one(agent_msg)
@@ -1199,7 +1414,8 @@ async def user_chat(req: UserChatRequest):
     return {
         "thread_id": thread_id,
         "user_message": {k: v for k, v in user_msg.items() if k != "_id"},
-        "agent_response": {k: v for k, v in agent_msg.items() if k != "_id"}
+        "agent_response": {k: v for k, v in agent_msg.items() if k != "_id"},
+        "model_info": {"model": result["model"], "mode": result["mode"], "routing": result["routing"]}
     }
 
 @api_router.get("/chat/history")

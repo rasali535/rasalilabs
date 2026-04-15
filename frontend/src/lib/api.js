@@ -53,6 +53,12 @@ export const getChatHistory = () => api.get("/chat/history").then(r => r.data);
 export const getBudgetSummary = () => api.get("/budget/summary").then(r => r.data);
 export const getBudgetByProject = () => api.get("/budget/projects").then(r => r.data);
 
+// ─── Models ───
+export const getModels = () => api.get("/models").then(r => r.data);
+export const updateModelConfig = (data) => api.post("/models/config", data).then(r => r.data);
+export const pullModel = (data) => api.post("/models/pull", data).then(r => r.data);
+export const testModel = (name) => api.get(`/models/test/${encodeURIComponent(name)}`).then(r => r.data);
+
 // ─── Artifact Rendering ───
 export const renderArtifact = (data) => api.post("/artifacts/render", data).then(r => r.data);
 export const downloadArtifact = (id) => `${API}/artifacts/${id}/download`;

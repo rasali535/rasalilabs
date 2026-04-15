@@ -7,6 +7,7 @@ import {
   ShieldCheck,
   FolderOpen,
   DollarSign,
+  Cpu,
   Zap,
 } from "lucide-react";
 
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { path: "/approvals", label: "Approvals", icon: ShieldCheck, testId: "nav-approvals" },
   { path: "/projects", label: "Projects", icon: FolderOpen, testId: "nav-projects" },
   { path: "/budget", label: "Budget", icon: DollarSign, testId: "nav-budget" },
+  { path: "/models", label: "Models", icon: Cpu, testId: "nav-models" },
 ];
 
 export default function Sidebar() {

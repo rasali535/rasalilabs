@@ -32,11 +32,24 @@ class APITester:
         else:
             print(f"❌ {name} - {details}")
         
+        # Convert response_data to JSON-serializable format
+        serializable_data = None
+        if response_data is not None:
+            try:
+                if hasattr(response_data, 'json'):
+                    serializable_data = response_data.json()
+                elif isinstance(response_data, (dict, list, str, int, float, bool)):
+                    serializable_data = response_data
+                else:
+                    serializable_data = str(response_data)
+            except:
+                serializable_data = str(response_data)
+        
         self.test_results.append({
             "test": name,
             "success": success,
             "details": details,
-            "response_data": response_data
+            "response_data": serializable_data
         })
 
     def test_health_endpoint(self):
@@ -47,7 +60,13 @@ class APITester:
             data = response.json() if success else {}
             
             if success:
-                # Validate health response structure
+                # Validate health response structure including model routing info
+                required_fields = ["status", "ollama_available", "routing_mode", "reasoning_model", "coding_model"]
+                missing_fields = [field for field in required_fields if field not in data]
+                if missing_fields:
+                    success = False
+                    self.log_test("Health endpoint", success, f"Missing model routing fields: {missing_fields}", data)
+                    return success
                 required_fields = ["status", "ollama_available", "mode"]
                 missing_fields = [f for f in required_fields if f not in data]
                 if missing_fields:
@@ -623,6 +642,194 @@ class APITester:
             self.log_test("WebSocket Connection", False, str(e))
             return False
 
+    def test_get_models(self):
+        """Test GET /api/models returns complete config"""
+        try:
+            response = requests.get(f"{self.api_url}/models", timeout=10)
+            success = response.status_code == 200
+            data = response.json() if success else {}
+            
+            if success:
+                # Validate models response structure
+                required_sections = ["config", "ollama_available", "available_models", "routing_table"]
+                missing_sections = [section for section in required_sections if section not in data]
+                if missing_sections:
+                    success = False
+                    details = f"Missing sections: {missing_sections}"
+                else:
+                    # Verify routing table has all 8 agents
+                    expected_agents = ["ceo", "cfo", "hr", "ux", "developer", "frontend", "backend", "devops"]
+                    routing_table = data.get('routing_table', {})
+                    missing_agents = [agent for agent in expected_agents if agent not in routing_table]
+                    if missing_agents:
+                        success = False
+                        details = f"Missing agents in routing table: {missing_agents}"
+                    else:
+                        details = f"Complete config with {len(routing_table)} agents, Ollama: {data.get('ollama_available')}"
+            else:
+                details = f"HTTP {response.status_code}: {response.text[:100]}"
+            
+            self.log_test("Get Models Config", success, details, data)
+            return success
+        except Exception as e:
+            self.log_test("Get Models Config", False, str(e))
+            return False
+
+    def test_update_model_config(self):
+        """Test POST /api/models/config updates configuration"""
+        try:
+            test_config = {
+                "mode": "simulation",
+                "reasoning_model": "test-llama",
+                "coding_model": "test-qwen",
+                "role_overrides": {"ceo": "custom-model"}
+            }
+            
+            response = requests.post(f"{self.api_url}/models/config", json=test_config, timeout=10)
+            success = response.status_code == 200
+            data = response.json() if success else {}
+            
+            if success:
+                if data.get("status") == "updated":
+                    # Verify the config was actually updated
+                    verify_response = requests.get(f"{self.api_url}/models", timeout=10)
+                    if verify_response.status_code == 200:
+                        verify_data = verify_response.json()
+                        config = verify_data.get("config", {})
+                        if (config.get("mode") == "simulation" and 
+                            config.get("reasoning_model") == "test-llama" and
+                            config.get("coding_model") == "test-qwen" and
+                            config.get("role_overrides", {}).get("ceo") == "custom-model"):
+                            details = "Config updated and persisted successfully"
+                        else:
+                            success = False
+                            details = "Config not persisted correctly"
+                    else:
+                        success = False
+                        details = "Failed to verify config update"
+                else:
+                    success = False
+                    details = f"Unexpected response status: {data.get('status')}"
+            else:
+                details = f"HTTP {response.status_code}: {response.text[:100]}"
+            
+            self.log_test("Update Model Config", success, details, data)
+            return success
+        except Exception as e:
+            self.log_test("Update Model Config", False, str(e))
+            return False
+
+    def test_model_testing(self):
+        """Test GET /api/models/test/{model_name}"""
+        try:
+            response = requests.get(f"{self.api_url}/models/test/simulation", timeout=15)
+            success = response.status_code == 200
+            data = response.json() if success else {}
+            
+            if success:
+                if data.get("status") == "error" and "not available" in data.get("detail", ""):
+                    details = "Correctly reports Ollama offline"
+                elif data.get("status") == "ok":
+                    details = f"Model test successful: {data.get('response', '')[:50]}"
+                else:
+                    details = f"Unexpected test result: {data.get('status')}"
+            else:
+                details = f"HTTP {response.status_code}: {response.text[:100]}"
+            
+            self.log_test("Test Model", success, details, data)
+            return success
+        except Exception as e:
+            self.log_test("Test Model", False, str(e))
+            return False
+
+    def test_model_pull(self):
+        """Test POST /api/models/pull"""
+        try:
+            response = requests.post(f"{self.api_url}/models/pull", 
+                                   json={"model_name": "test-model"}, timeout=10)
+            # Expecting 503 since Ollama is offline
+            success = response.status_code == 503
+            data = response.json() if response.status_code in [200, 503] else {}
+            
+            if success:
+                details = "Correctly rejects pull when Ollama offline"
+            else:
+                details = f"HTTP {response.status_code}: {response.text[:100]}"
+            
+            self.log_test("Model Pull (Offline)", success, details, data)
+            return success
+        except Exception as e:
+            self.log_test("Model Pull (Offline)", False, str(e))
+            return False
+
+    def test_chat_with_model_info(self):
+        """Test POST /api/chat returns model_info"""
+        try:
+            chat_data = {
+                "to_agent": "developer",
+                "content": "Hello, can you help with a coding task?"
+            }
+            
+            response = requests.post(f"{self.api_url}/chat", json=chat_data, timeout=15)
+            success = response.status_code == 200
+            data = response.json() if success else {}
+            
+            if success:
+                required_fields = ["thread_id", "user_message", "agent_response", "model_info"]
+                missing_fields = [field for field in required_fields if field not in data]
+                if missing_fields:
+                    success = False
+                    details = f"Missing fields: {missing_fields}"
+                else:
+                    model_info = data.get("model_info", {})
+                    model_info_fields = ["model", "mode", "routing"]
+                    missing_model_fields = [field for field in model_info_fields if field not in model_info]
+                    if missing_model_fields:
+                        success = False
+                        details = f"Missing model_info fields: {missing_model_fields}"
+                    else:
+                        agent_response = data.get("agent_response", {})
+                        if "model_used" not in agent_response or "model_mode" not in agent_response:
+                            success = False
+                            details = "Agent response missing model_used or model_mode fields"
+                        else:
+                            details = f"Chat with model info: {model_info.get('model')} ({model_info.get('mode')})"
+            else:
+                details = f"HTTP {response.status_code}: {response.text[:100]}"
+            
+            self.log_test("Chat with Model Info", success, details, data)
+            return success
+        except Exception as e:
+            self.log_test("Chat with Model Info", False, str(e))
+            return False
+
+    def test_messages_include_model_fields(self):
+        """Test that messages include model_used and model_mode fields"""
+        try:
+            response = requests.get(f"{self.api_url}/messages?from_agent=developer", timeout=10)
+            success = response.status_code == 200
+            data = response if success else []
+            
+            if success and data:
+                messages = data if isinstance(data, list) else []
+                if messages:
+                    recent_message = messages[0]
+                    if "model_used" in recent_message and "model_mode" in recent_message:
+                        details = f"Messages include model fields: {recent_message.get('model_used')} ({recent_message.get('model_mode')})"
+                    else:
+                        success = False
+                        details = "Messages missing model_used or model_mode fields"
+                else:
+                    details = "No messages found to verify model fields"
+            else:
+                details = f"HTTP {response.status_code}: {response.text[:100]}" if not success else "No messages to check"
+            
+            self.log_test("Messages Model Fields", success, details, data)
+            return success
+        except Exception as e:
+            self.log_test("Messages Model Fields", False, str(e))
+            return False
+
     def run_all_tests(self):
         """Run all API tests in sequence"""
         print(f"🚀 Starting API tests for {self.base_url}")
@@ -659,6 +866,14 @@ class APITester:
         self.test_get_chat_history()
         self.test_budget_summary()
         self.test_budget_projects()
+        
+        # Test model routing features
+        self.test_get_models()
+        self.test_update_model_config()
+        self.test_model_testing()
+        self.test_model_pull()
+        self.test_chat_with_model_info()
+        self.test_messages_include_model_fields()
         
         # Test artifact rendering (if HTML artifact exists)
         if hasattr(self, 'html_artifact_id') and self.html_artifact_id:

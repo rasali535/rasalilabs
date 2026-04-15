@@ -1,0 +1,44 @@
+{
+  "summary": "Completed comprehensive testing of Ollama model switching and routing feature. All backend APIs work correctly, Models page loads and functions properly, model badges display on messages, and all existing features remain functional.",
+  "backend_issues": {
+    "critical_bugs": [],
+    "flaky_endpoints": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "passed_tests": [
+    "GET /api/models returns complete config with routing table for all 8 agents",
+    "POST /api/models/config successfully updates and persists configuration",
+    "GET /api/models/test/{model_name} correctly handles Ollama offline state",
+    "GET /api/health includes routing_mode, reasoning_model, coding_model fields",
+    "POST /api/models/pull correctly rejects when Ollama offline (503 status)",
+    "POST /api/chat returns model_info with model, mode, and routing fields",
+    "Messages include model_used and model_mode fields",
+    "Models page loads with all components: Ollama endpoint, routing mode buttons, model inputs",
+    "Routing table displays all 8 agents with correct model assignments per task type",
+    "Available Models tab shows pull input functionality",
+    "Per-Agent Overrides tab shows override inputs for all agents",
+    "Save Config button works and persists changes",
+    "Model badges (SIM - yellow) display correctly on Boardroom messages",
+    "Model badges display correctly on Dialogue messages",
+    "Sidebar shows Models nav item and navigates correctly",
+    "All existing features work: Dashboard, Boardroom, Dialogue, Delegation, Approvals, Projects, Budget",
+    "All navigation items present and functional"
+  ],
+  "test_report_links": [
+    "/app/backend_test.py"
+  ],
+  "action_item_for_main_agent": "",
+  "updated_files": [
+    "/app/backend_test.py"
+  ],
+  "success_percentage": {
+    "backend": "100% (27/27 tests passed including 6 new model routing tests)",
+    "frontend": "100% (Models page fully functional, model badges working, all existing features working)"
+  },
+  "should_call_test_agent_after_fix": "false",
+  "should_main_agent_test_itself": "true"
+}
