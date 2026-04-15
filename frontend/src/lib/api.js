@@ -45,6 +45,26 @@ export const getArtifact = (id) => api.get(`/artifacts/${id}`).then(r => r.data)
 // ─── Execution ───
 export const executeProject = (projectId) => api.post("/execute", { project_id: projectId }).then(r => r.data);
 
+// ─── Chat ───
+export const chatWithAgent = (data) => api.post("/chat", data).then(r => r.data);
+export const getChatHistory = () => api.get("/chat/history").then(r => r.data);
+
+// ─── Budget ───
+export const getBudgetSummary = () => api.get("/budget/summary").then(r => r.data);
+export const getBudgetByProject = () => api.get("/budget/projects").then(r => r.data);
+
+// ─── Artifact Rendering ───
+export const renderArtifact = (data) => api.post("/artifacts/render", data).then(r => r.data);
+export const downloadArtifact = (id) => `${API}/artifacts/${id}/download`;
+
+// ─── WebSocket ───
+export const getWsUrl = (projectId) => {
+  const wsBase = process.env.REACT_APP_BACKEND_URL
+    .replace("https://", "wss://")
+    .replace("http://", "ws://");
+  return `${wsBase}/api/ws/${projectId}`;
+};
+
 export const AGENT_META = {
   ceo: { name: "Atlas", title: "CEO", color: "#FFFFFF", icon: "Crown" },
   cfo: { name: "Meridian", title: "CFO", color: "#FFD700", icon: "DollarSign" },

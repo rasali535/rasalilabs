@@ -7,6 +7,8 @@ import {
   AlertTriangle,
   ChevronRight,
   FileOutput,
+  Wifi,
+  WifiOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -17,6 +19,7 @@ import {
   getDecisions,
   executeProject,
   getProjects,
+  getWsUrl,
   AGENT_META,
 } from "@/lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -34,7 +37,9 @@ export default function Boardroom() {
   const [tasks, setTasks] = useState([]);
   const [decisions, setDecisions] = useState([]);
   const [executing, setExecuting] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
   const scrollRef = useRef(null);
+  const wsRef = useRef(null);
 
   const loadMeetings = useCallback(async () => {
     try {
@@ -66,15 +71,68 @@ export default function Boardroom() {
     }
   }, [activeMeeting]);
 
+  // WebSocket connection
+  useEffect(() => {
+    if (!activeMeeting?.project_id) return;
+
+    const wsUrl = getWsUrl(activeMeeting.project_id);
+    let ws;
+    try {
+      ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        setWsConnected(true);
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data.type === "message" && data.data) {
+            setMessages((prev) => {
+              // Avoid duplicates
+              if (prev.some((m) => m.id === data.data.id)) return prev;
+              return [...prev, data.data];
+            });
+          }
+          if (data.type === "task_update") {
+            // Refresh tasks on update
+            loadMeetingData();
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      };
+
+      ws.onclose = () => {
+        setWsConnected(false);
+      };
+
+      ws.onerror = () => {
+        setWsConnected(false);
+      };
+    } catch (e) {
+      // WebSocket not available, fall back to polling
+    }
+
+    return () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.close();
+      }
+    };
+  }, [activeMeeting?.project_id, loadMeetingData]);
+
   useEffect(() => {
     loadMeetings();
   }, [loadMeetings]);
 
   useEffect(() => {
     loadMeetingData();
-    const iv = setInterval(loadMeetingData, 3000);
+    // Use slower polling when WS is connected, faster when not
+    const interval = wsConnected ? 10000 : 3000;
+    const iv = setInterval(loadMeetingData, interval);
     return () => clearInterval(iv);
-  }, [loadMeetingData]);
+  }, [loadMeetingData, wsConnected]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -136,6 +194,16 @@ export default function Boardroom() {
             >
               {activeMeeting.status}
             </span>
+            <div className="flex items-center gap-1 ml-auto" data-testid="ws-status">
+              {wsConnected ? (
+                <Wifi className="w-3 h-3 text-green-500" />
+              ) : (
+                <WifiOff className="w-3 h-3 text-zinc-600" />
+              )}
+              <span className={`font-mono text-[9px] uppercase tracking-wider ${wsConnected ? "text-green-500" : "text-zinc-600"}`}>
+                {wsConnected ? "Live" : "Polling"}
+              </span>
+            </div>
           </>
         )}
       </div>

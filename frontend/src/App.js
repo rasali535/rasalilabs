@@ -3,12 +3,14 @@ import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import Sidebar from "@/components/Sidebar";
+import ChatDrawer from "@/components/ChatDrawer";
 import Dashboard from "@/pages/Dashboard";
 import Boardroom from "@/pages/Boardroom";
 import Dialogue from "@/pages/Dialogue";
 import Delegation from "@/pages/Delegation";
 import Approvals from "@/pages/Approvals";
 import Projects from "@/pages/Projects";
+import Budget from "@/pages/Budget";
 
 function App() {
   return (
@@ -23,9 +25,11 @@ function App() {
             <Route path="/delegation" element={<Delegation />} />
             <Route path="/approvals" element={<Approvals />} />
             <Route path="/projects" element={<Projects />} />
+            <Route path="/budget" element={<Budget />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
+        <ChatDrawer />
         <Toaster
           position="bottom-right"
           toastOptions={{

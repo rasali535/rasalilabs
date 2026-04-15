@@ -21,6 +21,7 @@ class APITester:
         self.meeting_id = None
         self.task_id = None
         self.decision_id = None
+        self.html_artifact_id = None
 
     def log_test(self, name: str, success: bool, details: str = "", response_data: Any = None):
         """Log test result"""
@@ -374,6 +375,11 @@ class APITester:
                     # Check for artifacts in our project
                     project_artifacts = [a for a in artifacts if a.get("project_id") == self.project_id]
                     details += f", {len(project_artifacts)} for our project"
+                    # Store HTML artifact ID for rendering tests
+                    for artifact in project_artifacts:
+                        if artifact.get("artifact_type") == "html":
+                            self.html_artifact_id = artifact["id"]
+                            break
             else:
                 details = f"HTTP {response.status_code}"
             
@@ -381,6 +387,240 @@ class APITester:
             return success
         except Exception as e:
             self.log_test("Get Artifacts", False, str(e))
+            return False
+
+    def test_chat_with_agent(self):
+        """Test POST /api/chat - user sends message to agent"""
+        try:
+            chat_data = {
+                "to_agent": "ceo",
+                "content": "Hello, I need to discuss the project status.",
+                "project_id": self.project_id
+            }
+            response = requests.post(f"{self.api_url}/chat", json=chat_data, timeout=15)
+            success = response.status_code == 200
+            
+            if success:
+                result = response.json()
+                required_fields = ["thread_id", "user_message", "agent_response"]
+                missing_fields = [f for f in required_fields if f not in result]
+                if missing_fields:
+                    success = False
+                    details = f"Missing fields: {missing_fields}"
+                else:
+                    user_msg = result["user_message"]
+                    agent_msg = result["agent_response"]
+                    if (user_msg.get("from_agent") == "user" and 
+                        agent_msg.get("from_agent") == "ceo" and
+                        agent_msg.get("content")):
+                        details = f"Chat successful - Agent responded: {agent_msg['content'][:50]}..."
+                    else:
+                        success = False
+                        details = "Invalid chat response structure"
+            else:
+                details = f"HTTP {response.status_code}"
+            
+            self.log_test("Chat with Agent", success, details, result if success else None)
+            return success
+        except Exception as e:
+            self.log_test("Chat with Agent", False, str(e))
+            return False
+
+    def test_get_chat_history(self):
+        """Test GET /api/chat/history - returns chat history"""
+        try:
+            response = requests.get(f"{self.api_url}/chat/history", timeout=10)
+            success = response.status_code == 200
+            
+            if success:
+                history = response.json()
+                details = f"Found {len(history)} chat messages"
+                # Check if our recent chat message is in history
+                user_messages = [msg for msg in history if msg.get("from_agent") == "user"]
+                agent_messages = [msg for msg in history if msg.get("to_agent") == "user"]
+                details += f" ({len(user_messages)} from user, {len(agent_messages)} to user)"
+            else:
+                details = f"HTTP {response.status_code}"
+            
+            self.log_test("Get Chat History", success, details, history if success else None)
+            return success
+        except Exception as e:
+            self.log_test("Get Chat History", False, str(e))
+            return False
+
+    def test_budget_summary(self):
+        """Test GET /api/budget/summary - returns budget summary"""
+        try:
+            response = requests.get(f"{self.api_url}/budget/summary", timeout=10)
+            success = response.status_code == 200
+            
+            if success:
+                summary = response.json()
+                required_fields = ["total_budget", "total_spent", "remaining", "utilization_pct", "by_department", "by_agent"]
+                missing_fields = [f for f in required_fields if f not in summary]
+                if missing_fields:
+                    success = False
+                    details = f"Missing fields: {missing_fields}"
+                else:
+                    details = f"Budget: ${summary['total_budget']}, Spent: ${summary['total_spent']}, Utilization: {summary['utilization_pct']}%"
+            else:
+                details = f"HTTP {response.status_code}"
+            
+            self.log_test("Get Budget Summary", success, details, summary if success else None)
+            return success
+        except Exception as e:
+            self.log_test("Get Budget Summary", False, str(e))
+            return False
+
+    def test_budget_projects(self):
+        """Test GET /api/budget/projects - returns per-project budget breakdown"""
+        try:
+            response = requests.get(f"{self.api_url}/budget/projects", timeout=10)
+            success = response.status_code == 200
+            
+            if success:
+                projects = response.json()
+                details = f"Found budget data for {len(projects)} projects"
+                if projects:
+                    # Validate structure of first project
+                    project = projects[0]
+                    required_fields = ["project_id", "goal", "status", "budget", "spent", "remaining"]
+                    missing_fields = [f for f in required_fields if f not in project]
+                    if missing_fields:
+                        success = False
+                        details += f", but missing fields: {missing_fields}"
+                    else:
+                        details += f", first project budget: ${project['budget']}"
+            else:
+                details = f"HTTP {response.status_code}"
+            
+            self.log_test("Get Budget Projects", success, details, projects if success else None)
+            return success
+        except Exception as e:
+            self.log_test("Get Budget Projects", False, str(e))
+            return False
+
+    def test_render_artifact_png(self):
+        """Test POST /api/artifacts/render with render_type=png"""
+        if not hasattr(self, 'html_artifact_id') or not self.html_artifact_id:
+            self.log_test("Render Artifact PNG", False, "No HTML artifact ID available")
+            return False
+        
+        try:
+            render_data = {
+                "artifact_id": self.html_artifact_id,
+                "render_type": "png"
+            }
+            response = requests.post(f"{self.api_url}/artifacts/render", json=render_data, timeout=30)
+            success = response.status_code == 200
+            
+            if success:
+                result = response.json()
+                if (result.get("artifact_type") == "png" and 
+                    result.get("content") and 
+                    result.get("name")):
+                    details = f"PNG rendered successfully: {result['name']}"
+                else:
+                    success = False
+                    details = "Invalid PNG render response structure"
+            else:
+                details = f"HTTP {response.status_code}"
+            
+            self.log_test("Render Artifact PNG", success, details, result if success else None)
+            return success
+        except Exception as e:
+            self.log_test("Render Artifact PNG", False, str(e))
+            return False
+
+    def test_render_artifact_pdf(self):
+        """Test POST /api/artifacts/render with render_type=pdf"""
+        if not hasattr(self, 'html_artifact_id') or not self.html_artifact_id:
+            self.log_test("Render Artifact PDF", False, "No HTML artifact ID available")
+            return False
+        
+        try:
+            render_data = {
+                "artifact_id": self.html_artifact_id,
+                "render_type": "pdf"
+            }
+            response = requests.post(f"{self.api_url}/artifacts/render", json=render_data, timeout=30)
+            success = response.status_code == 200
+            
+            if success:
+                result = response.json()
+                if (result.get("artifact_type") == "pdf" and 
+                    result.get("content") and 
+                    result.get("name")):
+                    details = f"PDF rendered successfully: {result['name']}"
+                else:
+                    success = False
+                    details = "Invalid PDF render response structure"
+            else:
+                details = f"HTTP {response.status_code}"
+            
+            self.log_test("Render Artifact PDF", success, details, result if success else None)
+            return success
+        except Exception as e:
+            self.log_test("Render Artifact PDF", False, str(e))
+            return False
+
+    def test_websocket_connection(self):
+        """Test WebSocket endpoint at /api/ws/{project_id}"""
+        if not self.project_id:
+            self.log_test("WebSocket Connection", False, "No project ID available")
+            return False
+        
+        try:
+            import websocket
+            import threading
+            import time
+            
+            ws_url = self.base_url.replace("https://", "wss://").replace("http://", "ws://")
+            ws_url += f"/api/ws/{self.project_id}"
+            
+            connection_success = False
+            error_msg = ""
+            
+            def on_open(ws):
+                nonlocal connection_success
+                connection_success = True
+            
+            def on_error(ws, error):
+                nonlocal error_msg
+                error_msg = str(error)
+            
+            def on_close(ws, close_status_code, close_msg):
+                pass
+            
+            ws = websocket.WebSocketApp(ws_url,
+                                      on_open=on_open,
+                                      on_error=on_error,
+                                      on_close=on_close)
+            
+            # Run WebSocket in a separate thread
+            wst = threading.Thread(target=ws.run_forever)
+            wst.daemon = True
+            wst.start()
+            
+            # Wait for connection
+            time.sleep(2)
+            ws.close()
+            
+            if connection_success:
+                details = f"WebSocket connection successful to {ws_url}"
+                success = True
+            else:
+                details = f"WebSocket connection failed: {error_msg}"
+                success = False
+            
+            self.log_test("WebSocket Connection", success, details)
+            return success
+        except ImportError:
+            # websocket-client not available, skip test
+            self.log_test("WebSocket Connection", True, "Skipped - websocket-client not available")
+            return True
+        except Exception as e:
+            self.log_test("WebSocket Connection", False, str(e))
             return False
 
     def run_all_tests(self):
@@ -413,6 +653,20 @@ class APITester:
         # Wait for execution to generate artifacts
         time.sleep(3)
         self.test_get_artifacts()
+        
+        # Test new features
+        self.test_chat_with_agent()
+        self.test_get_chat_history()
+        self.test_budget_summary()
+        self.test_budget_projects()
+        
+        # Test artifact rendering (if HTML artifact exists)
+        if hasattr(self, 'html_artifact_id') and self.html_artifact_id:
+            self.test_render_artifact_png()
+            self.test_render_artifact_pdf()
+        
+        # Test WebSocket connection
+        self.test_websocket_connection()
         
         # Print summary
         print("=" * 60)

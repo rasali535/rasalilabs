@@ -6,6 +6,7 @@ import {
   ListTodo,
   ShieldCheck,
   FolderOpen,
+  DollarSign,
   Zap,
 } from "lucide-react";
 
@@ -16,6 +17,7 @@ const NAV_ITEMS = [
   { path: "/delegation", label: "Delegation", icon: ListTodo, testId: "nav-delegation" },
   { path: "/approvals", label: "Approvals", icon: ShieldCheck, testId: "nav-approvals" },
   { path: "/projects", label: "Projects", icon: FolderOpen, testId: "nav-projects" },
+  { path: "/budget", label: "Budget", icon: DollarSign, testId: "nav-budget" },
 ];
 
 export default function Sidebar() {

@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query
+from fastapi import FastAPI, APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -7,6 +8,8 @@ import logging
 import httpx
 import json
 import asyncio
+import tempfile
+import base64
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
@@ -190,6 +193,49 @@ class ArtifactOut(BaseModel):
 class ExecuteProjectRequest(BaseModel):
     project_id: str
 
+class UserChatRequest(BaseModel):
+    to_agent: str
+    content: str
+    project_id: Optional[str] = None
+
+class RenderArtifactRequest(BaseModel):
+    artifact_id: str
+    render_type: str  # "png" or "pdf"
+
+# ─── WebSocket Manager ───
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket, project_id: str):
+        await websocket.accept()
+        if project_id not in self.active_connections:
+            self.active_connections[project_id] = []
+        self.active_connections[project_id].append(websocket)
+
+    def disconnect(self, websocket: WebSocket, project_id: str):
+        if project_id in self.active_connections:
+            self.active_connections[project_id] = [
+                c for c in self.active_connections[project_id] if c != websocket
+            ]
+
+    async def broadcast(self, project_id: str, data: dict):
+        if project_id in self.active_connections:
+            dead = []
+            for connection in self.active_connections[project_id]:
+                try:
+                    await connection.send_json(data)
+                except Exception:
+                    dead.append(connection)
+            for d in dead:
+                self.active_connections[project_id].remove(d)
+
+ws_manager = ConnectionManager()
+
+# Artifacts directory
+ARTIFACTS_DIR = Path("/app/artifacts")
+ARTIFACTS_DIR.mkdir(exist_ok=True)
+
 # ─── Agent Registry ───
 AGENTS = {
     "ceo": {
@@ -326,8 +372,21 @@ SIMULATION_RESPONSES = {
     "devops": {
         "kickoff": "No deployment blockers. The infrastructure is ready. I'll prepare the build pipeline and artifact generation once development is complete.",
         "approval": "Deployment readiness confirmed. All systems are operational. Ready to release when approved.",
-        "default": "Infrastructure is stable. I'll monitor the deployment pipeline and ensure smooth delivery."
+        "default": "Infrastructure is stable. I'll monitor the deployment pipeline and ensure smooth delivery.",
+        "chat": "Hi! I'm Sentinel, your DevOps engineer. I handle deployments, CI/CD, Docker, and infrastructure monitoring. How can I help you with operations today?"
     }
+}
+
+# User chat response templates for simulation mode
+USER_CHAT_RESPONSES = {
+    "ceo": "Thank you for reaching out. As CEO, I oversee all company operations and strategy. I've noted your message and will factor it into our planning. Is there a specific project or decision you'd like to discuss?",
+    "cfo": "Thanks for your message. I manage all financial aspects including budgets, cost analysis, and resource allocation. I can provide you with budget breakdowns or cost projections for any active project. What financial information do you need?",
+    "hr": "Hello! As Head of HR, I manage team capacity, agent availability, and resource allocation. I can tell you about current staffing levels, workload distribution, or help with any team-related concerns. What can I help with?",
+    "ux": "Hi there! I'm the UI/UX lead. I handle design specifications, wireframes, and user experience strategy. I can discuss design approaches, review layouts, or create visual specs. What design topic would you like to explore?",
+    "developer": "Hey! I'm the senior developer on the team. I handle architecture decisions, code reviews, and complex implementations. I can help with technical questions, code approaches, or system design. What technical challenge are you working on?",
+    "frontend": "Hi! I'm the frontend engineer. I specialize in React, CSS, HTML, and responsive design. I can discuss UI implementation, component architecture, or frontend performance. What frontend topic interests you?",
+    "backend": "Hello! I'm the backend engineer. I work with Python, APIs, databases, and server architecture. I can help with API design, data modeling, or backend optimization. What server-side question do you have?",
+    "devops": "Hi! I'm the DevOps engineer. I manage deployments, CI/CD pipelines, Docker, and infrastructure. I can discuss deployment strategies, monitoring, or system reliability. What ops topic do you need help with?",
 }
 
 async def get_agent_response(role: str, context: str, task_type: str = "default") -> str:
@@ -406,6 +465,8 @@ async def run_kickoff_meeting(project_id: str, goal: str, output_format: str):
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         messages.append(msg)
+        # Broadcast via WebSocket
+        await ws_manager.broadcast(project_id, {"type": "message", "data": msg})
         await asyncio.sleep(0.05)
     
     if messages:
@@ -515,6 +576,10 @@ async def execute_project(project_id: str):
         }
         await db.messages.insert_one(msg)
         
+        # Broadcast via WebSocket
+        await ws_manager.broadcast(project_id, {"type": "message", "data": msg})
+        await ws_manager.broadcast(project_id, {"type": "task_update", "data": {"task_id": task["id"], "status": "completed"}})
+        
         await db.tasks.update_one(
             {"id": task["id"]},
             {"$set": {"status": "completed", "output": response}}
@@ -536,8 +601,9 @@ async def generate_artifacts(project_id: str, goal: str, output_format: str):
     artifacts = []
     
     fmt = output_format.lower()
+    html_content = None
     
-    if "html" in fmt or fmt == "html":
+    if "html" in fmt or fmt == "html" or "png" in fmt or "pdf" in fmt:
         html_content = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -562,16 +628,58 @@ async def generate_artifacts(project_id: str, goal: str, output_format: str):
     </div>
 </body>
 </html>"""
-        artifacts.append({
-            "id": str(uuid.uuid4()),
-            "project_id": project_id,
-            "task_id": None,
-            "name": "output.html",
-            "artifact_type": "html",
-            "content": html_content,
-            "file_path": None,
-            "created_at": now
-        })
+        if "html" in fmt or fmt == "html" or "png" in fmt or "pdf" in fmt:
+            artifacts.append({
+                "id": str(uuid.uuid4()),
+                "project_id": project_id,
+                "task_id": None,
+                "name": "output.html",
+                "artifact_type": "html",
+                "content": html_content,
+                "file_path": None,
+                "created_at": now
+            })
+    
+    # PNG generation from HTML
+    if ("png" in fmt or fmt == "png") and html_content:
+        try:
+            png_path = await render_html_to_png(html_content, project_id)
+            if png_path:
+                # Read PNG and encode as base64 for storage
+                with open(png_path, "rb") as f:
+                    png_b64 = base64.b64encode(f.read()).decode()
+                artifacts.append({
+                    "id": str(uuid.uuid4()),
+                    "project_id": project_id,
+                    "task_id": None,
+                    "name": "output.png",
+                    "artifact_type": "png",
+                    "content": png_b64,
+                    "file_path": png_path,
+                    "created_at": now
+                })
+        except Exception as e:
+            logger.error(f"PNG generation failed: {e}")
+    
+    # PDF generation
+    if ("pdf" in fmt or fmt == "pdf"):
+        try:
+            pdf_path = await render_to_pdf(goal, project_id)
+            if pdf_path:
+                with open(pdf_path, "rb") as f:
+                    pdf_b64 = base64.b64encode(f.read()).decode()
+                artifacts.append({
+                    "id": str(uuid.uuid4()),
+                    "project_id": project_id,
+                    "task_id": None,
+                    "name": "output.pdf",
+                    "artifact_type": "pdf",
+                    "content": pdf_b64,
+                    "file_path": pdf_path,
+                    "created_at": now
+                })
+        except Exception as e:
+            logger.error(f"PDF generation failed: {e}")
     
     if "json" in fmt or fmt == "json":
         json_content = json.dumps({
@@ -635,6 +743,87 @@ if __name__ == "__main__":
     
     if artifacts:
         await db.artifacts.insert_many(artifacts)
+
+async def render_html_to_png(html_content: str, project_id: str) -> str:
+    """Render HTML to PNG using Playwright."""
+    try:
+        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/pw-browsers"
+        from playwright.async_api import async_playwright
+        png_path = str(ARTIFACTS_DIR / f"{project_id}_output.png")
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            page = await browser.new_page(viewport={"width": 1280, "height": 720})
+            await page.set_content(html_content, wait_until="networkidle")
+            await page.screenshot(path=png_path, full_page=True)
+            await browser.close()
+        
+        return png_path
+    except Exception as e:
+        logger.error(f"Playwright PNG render failed: {e}")
+        return None
+
+async def render_to_pdf(goal: str, project_id: str) -> str:
+    """Generate a PDF report using fpdf2."""
+    try:
+        from fpdf import FPDF
+        
+        pdf_path = str(ARTIFACTS_DIR / f"{project_id}_output.pdf")
+        
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=15)
+        
+        # Title
+        pdf.set_font("Helvetica", "B", 24)
+        pdf.set_text_color(0, 48, 255)
+        pdf.cell(0, 20, "AI Company Workflow Engine", ln=True, align="C")
+        pdf.ln(5)
+        
+        # Project goal
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.set_text_color(30, 30, 30)
+        pdf.cell(0, 12, "Project Report", ln=True, align="C")
+        pdf.ln(10)
+        
+        pdf.set_font("Helvetica", "", 12)
+        pdf.set_text_color(60, 60, 60)
+        pdf.multi_cell(0, 8, f"Goal: {goal}")
+        pdf.ln(5)
+        
+        # Fetch project tasks for report
+        tasks = await db.tasks.find({"project_id": project_id}, {"_id": 0}).to_list(50)
+        
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.set_text_color(30, 30, 30)
+        pdf.cell(0, 10, f"Tasks ({len(tasks)})", ln=True)
+        pdf.ln(3)
+        
+        pdf.set_font("Helvetica", "", 10)
+        for task in tasks:
+            status_icon = "[OK]" if task.get("status") == "completed" else "[--]"
+            agent = AGENTS.get(task.get("assigned_to", ""), {}).get("name", "Unassigned")
+            pdf.set_text_color(80, 80, 80)
+            pdf.cell(0, 7, f"  {status_icon} {task['title']} - {agent} ({task.get('status', 'pending')})", ln=True)
+        
+        pdf.ln(10)
+        
+        # Summary
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.set_text_color(30, 30, 30)
+        pdf.cell(0, 10, "Summary", ln=True)
+        pdf.ln(3)
+        
+        pdf.set_font("Helvetica", "", 11)
+        pdf.set_text_color(60, 60, 60)
+        completed = sum(1 for t in tasks if t.get("status") == "completed")
+        pdf.multi_cell(0, 7, f"Total tasks: {len(tasks)}\nCompleted: {completed}\nStatus: {'Delivered' if completed == len(tasks) else 'In Progress'}\nGenerated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
+        
+        pdf.output(pdf_path)
+        return pdf_path
+    except Exception as e:
+        logger.error(f"PDF generation failed: {e}")
+        return None
 
 # ─── API Routes ───
 
@@ -942,7 +1131,269 @@ async def get_stats():
         "agents_active": len([a for a in AGENTS.values() if a["status"] == "active"])
     }
 
+# ─── User Chat with Agents ───
+@api_router.post("/chat")
+async def user_chat(req: UserChatRequest):
+    if req.to_agent not in AGENTS:
+        raise HTTPException(400, f"Unknown agent: {req.to_agent}")
+    
+    thread_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc).isoformat()
+    
+    # Store user message
+    user_msg = {
+        "id": str(uuid.uuid4()),
+        "thread_id": thread_id,
+        "project_id": req.project_id,
+        "meeting_id": None,
+        "from_agent": "user",
+        "to_agent": req.to_agent,
+        "content": req.content,
+        "thread_type": "direct",
+        "created_at": now
+    }
+    await db.messages.insert_one(user_msg)
+    
+    # Generate agent response
+    agent = AGENTS[req.to_agent]
+    context = f"A user is directly messaging you. Their message: {req.content}"
+    if req.project_id:
+        project = await db.projects.find_one({"id": req.project_id}, {"_id": 0})
+        if project:
+            context += f"\nProject context: {project['goal']}"
+    
+    # Try Ollama first, fall back to simulation
+    ollama_available = await check_ollama_available()
+    if ollama_available:
+        try:
+            system_prompt = f"You are {agent['name']}, the {agent['title']}. {agent['description']} Respond helpfully and in-character. Keep responses concise (2-4 sentences)."
+            async with httpx.AsyncClient(timeout=30.0) as c:
+                r = await c.post(f"{OLLAMA_URL}/api/generate", json={
+                    "model": LLAMA_MODEL,
+                    "prompt": f"{system_prompt}\n\nUser message: {req.content}\n\nRespond:",
+                    "stream": False
+                })
+                if r.status_code == 200:
+                    response_text = r.json().get("response", "").strip()
+                else:
+                    response_text = USER_CHAT_RESPONSES.get(req.to_agent, "I'll look into that for you.")
+        except Exception:
+            response_text = USER_CHAT_RESPONSES.get(req.to_agent, "I'll look into that for you.")
+    else:
+        response_text = USER_CHAT_RESPONSES.get(req.to_agent, "I'll look into that for you.")
+    
+    # Store agent response
+    agent_msg = {
+        "id": str(uuid.uuid4()),
+        "thread_id": thread_id,
+        "project_id": req.project_id,
+        "meeting_id": None,
+        "from_agent": req.to_agent,
+        "to_agent": "user",
+        "content": response_text,
+        "thread_type": "direct",
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.messages.insert_one(agent_msg)
+    
+    return {
+        "thread_id": thread_id,
+        "user_message": {k: v for k, v in user_msg.items() if k != "_id"},
+        "agent_response": {k: v for k, v in agent_msg.items() if k != "_id"}
+    }
+
+@api_router.get("/chat/history")
+async def get_chat_history():
+    """Get all user-agent chat messages."""
+    pipeline = [
+        {"$match": {"$or": [{"from_agent": "user"}, {"to_agent": "user"}]}},
+        {"$sort": {"created_at": -1}},
+        {"$limit": 200}
+    ]
+    docs = await db.messages.aggregate(pipeline).to_list(200)
+    for d in docs:
+        d.pop("_id", None)
+    return docs
+
+# ─── Budget Tracking ───
+AGENT_HOURLY_RATES = {
+    "ceo": 250, "cfo": 200, "hr": 150, "ux": 175,
+    "developer": 200, "frontend": 180, "backend": 180, "devops": 190,
+}
+
+TASK_BASE_COSTS = {
+    "high": 500, "medium": 300, "low": 150,
+}
+
+@api_router.get("/budget/summary")
+async def get_budget_summary():
+    """Get overall budget summary across all projects."""
+    projects = await db.projects.find({}, {"_id": 0}).to_list(100)
+    tasks = await db.tasks.find({}, {"_id": 0}).to_list(500)
+    
+    total_budget = 0
+    total_spent = 0
+    by_department = {}
+    by_agent = {}
+    by_status = {"allocated": 0, "spent": 0, "remaining": 0}
+    
+    for task in tasks:
+        role = task.get("assigned_to", "developer")
+        priority = task.get("priority", "medium")
+        base_cost = TASK_BASE_COSTS.get(priority, 300)
+        hourly = AGENT_HOURLY_RATES.get(role, 180)
+        task_cost = base_cost + (hourly * 0.5)  # 30 min estimated per task
+        
+        total_budget += task_cost
+        
+        dept = AGENTS.get(role, {}).get("department", "unknown")
+        by_department[dept] = by_department.get(dept, 0) + task_cost
+        
+        agent_name = AGENTS.get(role, {}).get("name", role)
+        by_agent[role] = by_agent.get(role, {"name": agent_name, "cost": 0, "tasks": 0})
+        by_agent[role]["cost"] += task_cost
+        by_agent[role]["tasks"] += 1
+        
+        if task.get("status") == "completed":
+            total_spent += task_cost
+    
+    by_status["allocated"] = total_budget
+    by_status["spent"] = total_spent
+    by_status["remaining"] = total_budget - total_spent
+    
+    return {
+        "total_budget": round(total_budget, 2),
+        "total_spent": round(total_spent, 2),
+        "remaining": round(total_budget - total_spent, 2),
+        "utilization_pct": round((total_spent / total_budget * 100) if total_budget > 0 else 0, 1),
+        "by_department": {k: round(v, 2) for k, v in by_department.items()},
+        "by_agent": {k: {"name": v["name"], "cost": round(v["cost"], 2), "tasks": v["tasks"]} for k, v in by_agent.items()},
+        "by_status": {k: round(v, 2) for k, v in by_status.items()},
+        "projects_count": len(projects),
+        "total_tasks": len(tasks),
+    }
+
+@api_router.get("/budget/projects")
+async def get_budget_by_project():
+    """Get budget breakdown per project."""
+    projects = await db.projects.find({}, {"_id": 0}).to_list(100)
+    result = []
+    
+    for project in projects:
+        tasks = await db.tasks.find({"project_id": project["id"]}, {"_id": 0}).to_list(100)
+        project_budget = 0
+        project_spent = 0
+        agent_costs = {}
+        
+        for task in tasks:
+            role = task.get("assigned_to", "developer")
+            priority = task.get("priority", "medium")
+            base_cost = TASK_BASE_COSTS.get(priority, 300)
+            hourly = AGENT_HOURLY_RATES.get(role, 180)
+            task_cost = base_cost + (hourly * 0.5)
+            
+            project_budget += task_cost
+            if task.get("status") == "completed":
+                project_spent += task_cost
+            
+            agent_name = AGENTS.get(role, {}).get("name", role)
+            agent_costs[role] = agent_costs.get(role, {"name": agent_name, "cost": 0})
+            agent_costs[role]["cost"] += task_cost
+        
+        result.append({
+            "project_id": project["id"],
+            "goal": project["goal"],
+            "status": project["status"],
+            "budget": round(project_budget, 2),
+            "spent": round(project_spent, 2),
+            "remaining": round(project_budget - project_spent, 2),
+            "task_count": len(tasks),
+            "agent_costs": {k: {"name": v["name"], "cost": round(v["cost"], 2)} for k, v in agent_costs.items()},
+        })
+    
+    return result
+
+# ─── Artifact Rendering ───
+@api_router.post("/artifacts/render")
+async def render_artifact(req: RenderArtifactRequest):
+    """On-demand render an existing HTML artifact to PNG or PDF."""
+    artifact = await db.artifacts.find_one({"id": req.artifact_id}, {"_id": 0})
+    if not artifact:
+        raise HTTPException(404, "Artifact not found")
+    
+    if artifact.get("artifact_type") != "html":
+        raise HTTPException(400, "Can only render HTML artifacts")
+    
+    now = datetime.now(timezone.utc).isoformat()
+    project_id = artifact.get("project_id", "unknown")
+    
+    if req.render_type == "png":
+        png_path = await render_html_to_png(artifact["content"], project_id + "_render")
+        if not png_path:
+            raise HTTPException(500, "PNG rendering failed")
+        with open(png_path, "rb") as f:
+            png_b64 = base64.b64encode(f.read()).decode()
+        new_artifact = {
+            "id": str(uuid.uuid4()),
+            "project_id": project_id,
+            "task_id": None,
+            "name": "rendered_output.png",
+            "artifact_type": "png",
+            "content": png_b64,
+            "file_path": png_path,
+            "created_at": now
+        }
+        await db.artifacts.insert_one(new_artifact)
+        return {k: v for k, v in new_artifact.items() if k != "_id"}
+    
+    elif req.render_type == "pdf":
+        # Use the project goal for PDF
+        project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+        goal = project["goal"] if project else "Rendered artifact"
+        pdf_path = await render_to_pdf(goal, project_id + "_render")
+        if not pdf_path:
+            raise HTTPException(500, "PDF rendering failed")
+        with open(pdf_path, "rb") as f:
+            pdf_b64 = base64.b64encode(f.read()).decode()
+        new_artifact = {
+            "id": str(uuid.uuid4()),
+            "project_id": project_id,
+            "task_id": None,
+            "name": "rendered_output.pdf",
+            "artifact_type": "pdf",
+            "content": pdf_b64,
+            "file_path": pdf_path,
+            "created_at": now
+        }
+        await db.artifacts.insert_one(new_artifact)
+        return {k: v for k, v in new_artifact.items() if k != "_id"}
+    else:
+        raise HTTPException(400, "render_type must be 'png' or 'pdf'")
+
+@api_router.get("/artifacts/{artifact_id}/download")
+async def download_artifact(artifact_id: str):
+    """Download a file-based artifact."""
+    artifact = await db.artifacts.find_one({"id": artifact_id}, {"_id": 0})
+    if not artifact:
+        raise HTTPException(404, "Artifact not found")
+    
+    if artifact.get("file_path") and os.path.exists(artifact["file_path"]):
+        media_types = {"png": "image/png", "pdf": "application/pdf", "html": "text/html"}
+        mt = media_types.get(artifact.get("artifact_type"), "application/octet-stream")
+        return FileResponse(artifact["file_path"], media_type=mt, filename=artifact["name"])
+
 app.include_router(api_router)
+
+# ─── WebSocket (mounted directly on app, not router) ───
+@app.websocket("/api/ws/{project_id}")
+async def websocket_endpoint(websocket: WebSocket, project_id: str):
+    await ws_manager.connect(websocket, project_id)
+    try:
+        while True:
+            await websocket.receive_text()
+            # Keep connection alive, handle incoming WS messages if needed
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket, project_id)
 
 app.add_middleware(
     CORSMiddleware,

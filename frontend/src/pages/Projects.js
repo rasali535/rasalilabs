@@ -10,6 +10,8 @@ import {
   Users,
   ListTodo,
   MessageSquare,
+  Image,
+  FileText,
 } from "lucide-react";
 import {
   getProjects,
@@ -18,6 +20,7 @@ import {
   getTasks,
   getArtifacts,
   executeProject,
+  renderArtifact,
   AGENT_META,
 } from "@/lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -247,7 +250,7 @@ export default function Projects() {
                               </div>
                             </div>
                             <div className="flex items-center gap-2">
-                              {art.content && (
+                              {art.content && art.artifact_type !== "png" && art.artifact_type !== "pdf" && (
                                 <button
                                   className="btn-secondary px-2 py-1 text-[10px] flex items-center gap-1"
                                   onClick={() => setPreviewArtifact(art)}
@@ -257,7 +260,77 @@ export default function Projects() {
                                   Preview
                                 </button>
                               )}
-                              {art.content && (
+                              {art.artifact_type === "png" && art.content && (
+                                <button
+                                  className="btn-secondary px-2 py-1 text-[10px] flex items-center gap-1"
+                                  onClick={() => setPreviewArtifact(art)}
+                                  data-testid={`preview-png-${art.id}`}
+                                >
+                                  <Image className="w-3 h-3" />
+                                  View PNG
+                                </button>
+                              )}
+                              {art.artifact_type === "pdf" && art.content && (
+                                <button
+                                  className="btn-secondary px-2 py-1 text-[10px] flex items-center gap-1"
+                                  onClick={() => {
+                                    // Download PDF from base64
+                                    const byteChars = atob(art.content);
+                                    const byteNums = new Array(byteChars.length);
+                                    for (let i = 0; i < byteChars.length; i++) byteNums[i] = byteChars.charCodeAt(i);
+                                    const blob = new Blob([new Uint8Array(byteNums)], { type: "application/pdf" });
+                                    const url = URL.createObjectURL(blob);
+                                    const a = document.createElement("a");
+                                    a.href = url;
+                                    a.download = art.name;
+                                    a.click();
+                                    URL.revokeObjectURL(url);
+                                  }}
+                                  data-testid={`download-pdf-${art.id}`}
+                                >
+                                  <FileText className="w-3 h-3" />
+                                  Download PDF
+                                </button>
+                              )}
+                              {art.artifact_type === "html" && (
+                                <>
+                                  <button
+                                    className="px-2 py-1 text-[10px] flex items-center gap-1 bg-purple-500/10 border border-purple-500/30 text-purple-400 rounded-sm hover:bg-purple-500/20 transition-colors"
+                                    onClick={async () => {
+                                      try {
+                                        toast.info("Rendering PNG...");
+                                        await renderArtifact({ artifact_id: art.id, render_type: "png" });
+                                        toast.success("PNG rendered!");
+                                        loadDetails();
+                                      } catch (e) {
+                                        toast.error("PNG render failed");
+                                      }
+                                    }}
+                                    data-testid={`render-png-${art.id}`}
+                                  >
+                                    <Image className="w-3 h-3" />
+                                    Render PNG
+                                  </button>
+                                  <button
+                                    className="px-2 py-1 text-[10px] flex items-center gap-1 bg-orange-500/10 border border-orange-500/30 text-orange-400 rounded-sm hover:bg-orange-500/20 transition-colors"
+                                    onClick={async () => {
+                                      try {
+                                        toast.info("Generating PDF...");
+                                        await renderArtifact({ artifact_id: art.id, render_type: "pdf" });
+                                        toast.success("PDF generated!");
+                                        loadDetails();
+                                      } catch (e) {
+                                        toast.error("PDF generation failed");
+                                      }
+                                    }}
+                                    data-testid={`render-pdf-${art.id}`}
+                                  >
+                                    <FileText className="w-3 h-3" />
+                                    Render PDF
+                                  </button>
+                                </>
+                              )}
+                              {art.content && art.artifact_type !== "png" && art.artifact_type !== "pdf" && (
                                 <button
                                   className="btn-primary px-2 py-1 text-[10px] flex items-center gap-1"
                                   onClick={() => {
@@ -345,6 +418,15 @@ export default function Projects() {
                   title="HTML Preview"
                   sandbox="allow-scripts"
                   data-testid="html-preview-iframe"
+                />
+              </div>
+            ) : previewArtifact?.artifact_type === "png" ? (
+              <div className="rounded-sm border border-[#222222] overflow-hidden">
+                <img
+                  src={`data:image/png;base64,${previewArtifact.content}`}
+                  alt="PNG Preview"
+                  className="w-full"
+                  data-testid="png-preview-img"
                 />
               </div>
             ) : (
