@@ -1,0 +1,145 @@
+{
+  "project_name": "Autonomous AI Company Workflow Engine",
+  "theme": "Dark",
+  "archetype": "4 (Swiss & High-Contrast)",
+  "vibe": "Clean, modern corporate (Linear style), authoritative, dense control room",
+  "typography": {
+    "fonts": {
+      "headings": {
+        "family": "Chivo",
+        "weights": [300, 400, 700],
+        "usage": "H1-H4, large numeric displays, major section titles. Never use generic sans."
+      },
+      "body": {
+        "family": "IBM Plex Sans",
+        "weights": [400, 500, 600],
+        "usage": "Paragraphs, general UI text, descriptions."
+      },
+      "monospace": {
+        "family": "JetBrains Mono",
+        "weights": [400, 500],
+        "usage": "Agent tags, timestamps, code snippets, metadata, status labels, execution logs."
+      }
+    },
+    "hierarchy": {
+      "h1": "text-3xl sm:text-4xl tracking-tight font-bold",
+      "h2": "text-2xl sm:text-3xl tracking-tight font-semibold",
+      "h3": "text-xl font-medium tracking-tight",
+      "h4": "text-lg font-medium tracking-tight",
+      "body": "text-sm sm:text-base leading-relaxed",
+      "caption": "text-xs tracking-[0.05em] uppercase text-zinc-400 font-mono",
+      "agent_tag": "text-[11px] uppercase tracking-wider font-mono font-medium"
+    },
+    "rules": [
+      "Avoid default bolding. Use weight contrasts (e.g., Light heading vs Bold tag).",
+      "Overlines and labels MUST be JetBrains Mono, uppercase, with tracking."
+    ]
+  },
+  "colors": {
+    "background": {
+      "app": "#0A0A0A",
+      "panel": "#111111",
+      "panel_hover": "#1A1A1A",
+      "input": "#141414"
+    },
+    "border": {
+      "default": "#222222",
+      "focus": "#0030FF",
+      "subtle": "#1A1A1A"
+    },
+    "text": {
+      "primary": "#FFFFFF",
+      "secondary": "#A1A1AA",
+      "muted": "#52525B",
+      "inverse": "#000000"
+    },
+    "accent": {
+      "primary": "#0030FF",
+      "primary_hover": "#0025CC",
+      "success": "#22C55E",
+      "warning": "#FFD700",
+      "error": "#FF2A2A"
+    },
+    "agent_roles": {
+      "ceo": "#FFFFFF",
+      "cfo": "#FFD700",
+      "hr": "#F472B6",
+      "ux": "#A78BFA",
+      "dev": "#38BDF8",
+      "devops": "#22C55E"
+    }
+  },
+  "layout_and_spacing": {
+    "strategy": "The 'Control Room' Grid",
+    "structure": [
+      "Full viewport height (h-screen) with no page-level scroll. Scroll happens within individual panels.",
+      "Outer grid: grid-cols-12, gap-px, bg-border/40 to create precise 1px separators between panels."
+    ],
+    "panels": {
+      "left_sidebar": "col-span-12 md:col-span-2 lg:col-span-2 flex flex-col h-full bg-[#0A0A0A]",
+      "center_boardroom": "col-span-12 md:col-span-6 lg:col-span-7 flex flex-col h-full bg-[#111111]",
+      "right_sidebar": "col-span-12 md:col-span-4 lg:col-span-3 flex flex-col h-full bg-[#0A0A0A]",
+      "bottom_execution_bar": "Fixed or sticky to the bottom of the center panel, highly visible, spanning full width of the boardroom panel."
+    },
+    "padding": {
+      "panel_header": "px-4 py-3 border-b border-[#222222]",
+      "panel_content": "p-4 md:p-6 space-y-4",
+      "dense_list": "py-2 px-3"
+    },
+    "rules": [
+      "No gaps between main panels; rely entirely on 1px solid borders for separation.",
+      "Containers with borders must have internal padding.",
+      "Every pixel must be utilized. Use h-full on children."
+    ]
+  },
+  "micro_themes": {
+    "surface": "Grid Borders (Technical Look). App skeleton exposed via borders. 1px solid #222222 everywhere.",
+    "radius": "rounded-sm (max 4px). Linear style is sharp and precise. No pill-shaped buttons unless it's a very specific badge.",
+    "shadows": "Virtually none. Rely on border contrast. Occasional shadow-sm for active dropdowns or modals with a 1px border (#222222) wrapping the modal."
+  },
+  "components": {
+    "buttons": {
+      "primary": "bg-[#0030FF] text-white hover:bg-[#0025CC] rounded-sm font-medium tracking-wide transition-colors px-4 py-2",
+      "secondary": "bg-transparent border border-[#222222] text-white hover:bg-[#1A1A1A] rounded-sm px-4 py-2",
+      "ghost": "bg-transparent text-zinc-400 hover:text-white hover:bg-[#1A1A1A] rounded-sm"
+    },
+    "inputs_and_forms": {
+      "style": "bg-[#141414] border border-[#222222] focus:border-[#0030FF] focus:ring-1 focus:ring-[#0030FF] rounded-sm text-white px-3 py-2",
+      "labels": "JetBrains Mono text-xs text-zinc-400 uppercase tracking-widest mb-1 block"
+    },
+    "cards_and_tasks": {
+      "style": "bg-[#111111] border border-[#222222] hover:border-[#333333] transition-colors p-3 rounded-sm flex flex-col gap-2 cursor-pointer"
+    },
+    "agent_dialogue_message": {
+      "style": "flex flex-col gap-1 w-full pb-4",
+      "header": "flex items-center gap-2",
+      "name_tag": "font-mono text-[11px] px-1.5 py-0.5 rounded-sm bg-[#1A1A1A] border border-[#222222]",
+      "content": "text-[14px] leading-relaxed text-zinc-300 bg-[#1A1A1A]/50 p-3 rounded-sm border-l-2",
+      "rule": "Left border color maps to agent_roles (e.g., HR = Pink, Dev = Blue)"
+    },
+    "shadcn_overrides": "Force flat rectangles, remove excessive padding, remove default Vercel-like shadows. Strip out ring-offset on focus."
+  },
+  "motion_and_interactions": {
+    "hover": "Subtle background shifts (e.g. #111111 to #1A1A1A). Text color transitions from zinc-400 to white.",
+    "active": "Scale down slightly (scale-95) for buttons.",
+    "entrance": "Staggered fade-in (opacity 0 to 1, translate-y-1 to 0) for dialogue messages and task list items.",
+    "typing_indicator": "Use a subtle pulsing opacity on a JetBrains Mono '...' inside the dialogue transcript."
+  },
+  "assets_and_icons": {
+    "icons": "lucide-react. Stroke width 1.5. Sizes typically 16px (w-4 h-4) for inline, 20px (w-5 h-5) for standalone.",
+    "avatars": "Do not use placeholder images. Use CSS-based abstract initials inside squares (e.g. [HR], [CEO]) with JetBrains Mono, or sharp Lucide icons (User, Code, Terminal, Briefcase) colored according to their role."
+  },
+  "specific_views": {
+    "boardroom": {
+      "left_panel": "Participant List: vertical list of agents, with an active/idle status dot (green/grey).",
+      "center_panel": "Live Dialogue Transcript: scrollable area. Looks like a sleek command-line / chat hybrid. Strict chronological order.",
+      "right_panel": "Tabs: [Agenda] [Approvals] [Delegation]. Content switches below. Dense task cards.",
+      "bottom_panel": "Execution Area. Summarizes 'Next Action: Deploy Backend' with a massive primary button spanning the width."
+    }
+  },
+  "accessibility": {
+    "contrast": "Ensure all text against #0A0A0A / #111111 meets APCA guidelines. Minimum text color #71717A against #111111.",
+    "focus": "focus:outline-none focus:ring-1 focus:ring-[#0030FF] on all interactive elements.",
+    "testing": "All interactive and key informational elements MUST include a data-testid attribute in kebab-case."
+  }
+}
