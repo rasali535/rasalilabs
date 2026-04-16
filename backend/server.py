@@ -54,6 +54,8 @@ class MockCollection:
         return self
         
     async def to_list(self, length):
+        if not hasattr(self, '_current_results'):
+            self._current_results = MOCK_STORAGE.get(self.name, [])
         return self._current_results[:length]
         
     async def insert_one(self, doc):
@@ -92,10 +94,62 @@ class MockCollection:
             MOCK_STORAGE[self.name].remove(r)
         return type('obj', (object,), {'deleted_count': count})()
 
-    async def aggregate(self, pipeline):
-        # Very limited aggregation support for get_threads
-        results = MOCK_STORAGE[self.name]
-        # Skip implementation for now as it's complex, just return something
+    def aggregate(self, pipeline):
+        results = MOCK_STORAGE.get(self.name, [])
+        for stage in pipeline:
+            if "$match" in stage:
+                match_query = stage["$match"]
+                results = self._filter(results, match_query)
+            elif "$sort" in stage:
+                sort_spec = stage["$sort"]
+                for field, direction in sort_spec.items():
+                    results.sort(key=lambda x: x.get(field, ""), reverse=(direction == -1))
+            elif "$limit" in stage:
+                limit_val = stage["$limit"]
+                results = results[:limit_val]
+            elif "$group" in stage:
+                group_spec = stage["$group"]
+                group_field = group_spec["_id"]
+                if isinstance(group_field, str) and group_field.startswith("$"):
+                    group_field = group_field[1:]
+                
+                groups = {}
+                for doc in results:
+                    val = doc.get(group_field)
+                    if val not in groups:
+                        groups[val] = {"_id": val}
+                        # Initialize fields from group_spec
+                        for k, v in group_spec.items():
+                            if k == "_id": continue
+                            if "$first" in v: groups[val][k] = doc.get(v["$first"][1:] if v["$first"].startswith("$") else v["$first"])
+                            elif "$last" in v: groups[val][k] = doc.get(v["$last"][1:] if v["$last"].startswith("$") else v["$last"])
+                            elif "$sum" in v: groups[val][k] = 0
+                            elif "$max" in v: groups[val][k] = doc.get(v["$max"][1:] if v["$max"].startswith("$") else v["$max"])
+                            elif "$addToSet" in v: groups[val][k] = set()
+                    
+                    # Update fields
+                    for k, v in group_spec.items():
+                        if k == "_id": continue
+                        if "$sum" in v: groups[val][k] += 1
+                        elif "$last" in v: groups[val][k] = doc.get(v["$last"][1:] if v["$last"].startswith("$") else v["$last"])
+                        elif "$max" in v: 
+                            current_max = groups[val][k]
+                            new_val = doc.get(v["$max"][1:] if v["$max"].startswith("$") else v["$max"])
+                            if new_val and (not current_max or new_val > current_max):
+                                groups[val][k] = new_val
+                        elif "$addToSet" in v:
+                            item = doc.get(v["$addToSet"][1:] if v["$addToSet"].startswith("$") else v["$addToSet"])
+                            if item: groups[val][k].add(item)
+                
+                # Convert sets to lists and finalize groups
+                final_results = []
+                for g in groups.values():
+                    for k, v in g.items():
+                        if isinstance(v, set): g[k] = list(v)
+                    final_results.append(g)
+                results = final_results
+
+        self._current_results = results
         return self
 
     def _filter(self, data, query):
@@ -103,6 +157,14 @@ class MockCollection:
         for doc in data:
             match = True
             for k, v in query.items():
+                if k == "$or":
+                    or_match = False
+                    for subquery in v:
+                        if all(doc.get(sk) == sv for sk, sv in subquery.items()):
+                            or_match = True
+                            break
+                    if not or_match: match = False; break
+                    continue
                 if k.startswith("$"): continue # Skip complex operators
                 if isinstance(v, dict):
                     if "$in" in v:
