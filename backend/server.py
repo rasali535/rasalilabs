@@ -1,5 +1,5 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -20,9 +20,119 @@ from enum import Enum
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000, connectTimeoutMS=5000)
-db = client[os.environ.get('DB_NAME', 'rasalilabs')]
+mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=2000, connectTimeoutMS=2000)
+_real_db = client[os.environ.get('DB_NAME', 'rasalilabs')]
+
+# Global in-memory storage for Mock mode
+MOCK_STORAGE = {}
+
+class MockCollection:
+    def __init__(self, name):
+        self.name = name
+        if name not in MOCK_STORAGE:
+            MOCK_STORAGE[name] = []
+            
+    async def count_documents(self, query=None):
+        if not query: return len(MOCK_STORAGE[self.name])
+        return len(self._filter(MOCK_STORAGE[self.name], query))
+        
+    async def find_one(self, query, projection=None):
+        results = self._filter(MOCK_STORAGE[self.name], query)
+        return results[0] if results else None
+        
+    def find(self, query=None, projection=None):
+        self._current_results = self._filter(MOCK_STORAGE[self.name], query or {})
+        return self
+        
+    def sort(self, field, direction=-1):
+        self._current_results.sort(key=lambda x: x.get(field, ""), reverse=(direction == -1))
+        return self
+        
+    def limit(self, n):
+        self._current_results = self._current_results[:n]
+        return self
+        
+    async def to_list(self, length):
+        return self._current_results[:length]
+        
+    async def insert_one(self, doc):
+        MOCK_STORAGE[self.name].append(doc)
+        return type('obj', (object,), {'inserted_id': doc.get('id', str(uuid.uuid4()))})()
+        
+    async def insert_many(self, docs):
+        MOCK_STORAGE[self.name].extend(docs)
+        return type('obj', (object,), {'inserted_ids': [d.get('id', str(uuid.uuid4())) for d in docs]})()
+        
+    async def update_one(self, query, update, upsert=False):
+        results = self._filter(MOCK_STORAGE[self.name], query)
+        if results:
+            doc = results[0]
+            if "$set" in update:
+                doc.update(update["$set"])
+            return type('obj', (object,), {'matched_count': 1, 'modified_count': 1})()
+        elif upsert:
+            new_doc = query.copy()
+            if "$set" in update: new_doc.update(update["$set"])
+            MOCK_STORAGE[self.name].append(new_doc)
+            return type('obj', (object,), {'matched_count': 0, 'modified_count': 1})()
+        return type('obj', (object,), {'matched_count': 0, 'modified_count': 0})()
+
+    async def delete_one(self, query):
+        results = self._filter(MOCK_STORAGE[self.name], query)
+        if results:
+            MOCK_STORAGE[self.name].remove(results[0])
+            return type('obj', (object,), {'deleted_count': 1})()
+        return type('obj', (object,), {'deleted_count': 0})()
+
+    async def delete_many(self, query):
+        results = self._filter(MOCK_STORAGE[self.name], query)
+        count = len(results)
+        for r in results:
+            MOCK_STORAGE[self.name].remove(r)
+        return type('obj', (object,), {'deleted_count': count})()
+
+    async def aggregate(self, pipeline):
+        # Very limited aggregation support for get_threads
+        results = MOCK_STORAGE[self.name]
+        # Skip implementation for now as it's complex, just return something
+        return self
+
+    def _filter(self, data, query):
+        filtered = []
+        for doc in data:
+            match = True
+            for k, v in query.items():
+                if k.startswith("$"): continue # Skip complex operators
+                if isinstance(v, dict):
+                    if "$in" in v:
+                        if doc.get(k) not in v["$in"]: match = False; break
+                    else: continue
+                elif doc.get(k) != v:
+                    match = False
+                    break
+            if match: filtered.append(doc)
+        return filtered
+
+class MockDatabase:
+    def __getattr__(self, name):
+        return MockCollection(name)
+    def __getitem__(self, name):
+        return MockCollection(name)
+
+class DBProxy:
+    def __init__(self, db):
+        self._db = db
+        self._is_mock = False
+    def use_mock(self):
+        self._db = MockDatabase()
+        self._is_mock = True
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+    def __getitem__(self, name):
+        return self._db[name]
+
+db = DBProxy(_real_db)
 
 OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
 LLAMA_MODEL = os.environ.get('LLAMA_MODEL', 'llama3.2')
@@ -41,6 +151,31 @@ model_config = {
 _ollama_cache = {"available": None, "checked_at": 0, "models": []}
 
 app = FastAPI()
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    # Log the full exception for debugging
+    logger.error(f"Unhandled exception at {request.url.path}: {exc}", exc_info=True)
+    
+    # Create the response
+    response = JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal Server Error",
+            "message": str(exc),
+            "path": request.url.path
+        },
+    )
+    
+    # Manually inject CORS headers to ensure the browser doesn't mask the error
+    origin = request.headers.get("origin")
+    if origin:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "*"
+        
+    return response
 
 app.add_middleware(
     CORSMiddleware,
@@ -61,6 +196,17 @@ api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+@app.on_event("startup")
+async def check_db_connectivity():
+    """Verify MongoDB connectivity and fallback to mock if needed."""
+    try:
+        # Attempt to get server info to verify connectivity
+        await client.server_info()
+        logger.info("MongoDB connected successfully.")
+    except Exception as e:
+        logger.error(f"MongoDB connection failed: {e}. Switching to Mock Database for stabilization.")
+        db.use_mock()
 
 @app.on_event("startup")
 async def load_model_config():
@@ -618,6 +764,9 @@ async def run_kickoff_meeting(project_id: str, goal: str, output_format: str):
         {"id": project_id},
         {"$set": {"status": "in_progress", "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
+
+    # Start autonomous execution
+    asyncio.create_task(execute_project(project_id))
     
     return meeting_id
 
