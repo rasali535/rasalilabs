@@ -134,11 +134,21 @@ export default function Boardroom() {
     return () => clearInterval(iv);
   }, [loadMeetingData, wsConnected]);
 
-  useEffect(() => {
+  const messagesEndRef = useRef(null);
+
+  const scrollToBottom = useCallback(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, []);
+
+  useEffect(() => {
+    // Add a small delay to ensure DOM is updated before scrolling
+    const timer = setTimeout(() => {
+      scrollToBottom();
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [messages, scrollToBottom]);
 
   const handleExecute = async () => {
     if (!activeMeeting?.project_id) return;
@@ -176,7 +186,7 @@ export default function Boardroom() {
   return (
     <div className="h-full flex flex-col bg-[#0A0A0A]" data-testid="boardroom-page">
       {/* Header */}
-      <div className="px-4 py-3 border-b border-[#222222] flex items-center gap-3 shrink-0">
+      <div className="px-4 py-3 border-b border-[#222222] flex items-center gap-3 shrink-0 h-12">
         <h2 className="font-['Chivo'] text-base font-bold tracking-tight text-white" data-testid="boardroom-title">
           Boardroom
         </h2>
@@ -215,13 +225,13 @@ export default function Boardroom() {
           className="col-span-2 border-r border-[#222222] flex flex-col bg-[#0A0A0A]"
           data-testid="boardroom-participants-panel"
         >
-          <div className="panel-header">
+          <div className="panel-header h-10 px-4 flex items-center">
             <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
               Participants
             </span>
           </div>
-          <ScrollArea className="flex-1 p-3">
-            <div className="space-y-2">
+          <ScrollArea className="flex-1">
+            <div className="p-4 space-y-2">
               {(activeMeeting?.participants || Object.keys(AGENT_META)).map((role) => {
                 const meta = AGENT_META[role];
                 if (!meta) return null;
@@ -229,7 +239,7 @@ export default function Boardroom() {
                 return (
                   <div
                     key={role}
-                    className="flex items-center gap-2 py-1.5 px-2 rounded-sm hover:bg-[#141414] transition-colors"
+                    className="flex items-center gap-2 py-1.5 px-2 -mx-2 rounded-sm hover:bg-[#141414] transition-colors"
                     data-testid={`participant-${role}`}
                   >
                     <AgentAvatar role={role} size="sm" />
@@ -257,16 +267,21 @@ export default function Boardroom() {
           className="col-span-7 flex flex-col bg-[#111111]"
           data-testid="boardroom-dialogue-panel"
         >
-          <div className="panel-header">
-            <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
-              Meeting Transcript
-            </span>
-            <span className="font-mono text-[10px] text-zinc-600">
-              {messages.length} messages
-            </span>
+          <div className="panel-header h-10 px-4 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
+                Meeting Transcript
+              </span>
+              <span className="font-mono text-[10px] text-zinc-600">
+                ({messages.length})
+              </span>
+            </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto p-4 space-y-1" ref={scrollRef}>
+          <div 
+            ref={scrollRef}
+            className="flex-1 overflow-y-auto p-4 space-y-1 scroll-smooth"
+          >
             {messages.length === 0 ? (
               <div className="flex items-center justify-center h-full">
                 <p className="font-mono text-xs text-zinc-600 typing-indicator">
@@ -328,7 +343,7 @@ export default function Boardroom() {
           data-testid="boardroom-right-panel"
         >
           <Tabs defaultValue="agenda" className="flex flex-col h-full">
-            <TabsList className="bg-transparent border-b border-[#222222] rounded-none px-2 h-auto py-0 shrink-0">
+            <TabsList className="bg-transparent border-b border-[#222222] rounded-none px-2 h-10 py-0 shrink-0 flex items-center">
               <TabsTrigger
                 value="agenda"
                 className="font-mono text-[10px] uppercase tracking-wider data-[state=active]:bg-transparent data-[state=active]:text-white data-[state=active]:shadow-none data-[state=active]:border-b-2 data-[state=active]:border-[#0030FF] rounded-none py-3 px-3 text-zinc-500"

@@ -88,3 +88,16 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# Project specific ignores
+backend/artifacts_output/
+backend/scratch/
+scratch/
+*.log
+*.tmp
+backend_test_results.json
+image_test.json
+models.json
+backend/logo_base64.txt
+backend/logo_base64_utf8.txt
+test_result.md

@@ -206,7 +206,7 @@ QWEN_MODEL = os.environ.get('QWEN_MODEL', 'qwen2.5-coder')
 model_config = {
     "ollama_url": OLLAMA_URL,
     "reasoning_model": LLAMA_MODEL,
-    "coding_model": QWEN_MODEL,
+    "coding_model": os.environ.get('FEATHERLESS_MODEL', 'google/gemma-4-31B-it'),
     "featherless_api_key": os.environ.get('FEATHERLESS_API_KEY'),
     "featherless_base_url": os.environ.get('FEATHERLESS_BASE_URL', 'https://api.featherless.ai/v1'),
     "featherless_model": os.environ.get('FEATHERLESS_MODEL', 'google/gemma-4-31B-it'),
@@ -217,47 +217,58 @@ model_config = {
 # Cache for Ollama availability
 _ollama_cache = {"available": None, "checked_at": 0, "models": []}
 
-app = FastAPI()
+# ─── Lifespan Management ───
+from contextlib import asynccontextmanager
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    # Log the full exception for debugging
-    logger.error(f"Unhandled exception at {request.url.path}: {exc}", exc_info=True)
-    
-    # Create the response
-    response = JSONResponse(
-        status_code=500,
-        content={
-            "detail": "Internal Server Error",
-            "message": str(exc),
-            "path": request.url.path
-        },
-    )
-    
-    # Manually inject CORS headers to ensure the browser doesn't mask the error
-    origin = request.headers.get("origin")
-    if origin:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Methods"] = "*"
-        response.headers["Access-Control-Allow-Headers"] = "*"
-        
-    return response
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup logic
+    try:
+        # Check MongoDB connection
+        await client.admin.command('ping')
+        logger.info("MongoDB connected successfully.")
+    except Exception as e:
+        logger.error(f"MongoDB connection failed: {e}. Using Mock Database.")
+        db.use_mock()
+    yield
+    # Shutdown logic
+    client.close()
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=[
+app = FastAPI(lifespan=lifespan)
+
+# Allow origins from env or default to inclusive list
+origins = os.environ.get("ALLOWED_ORIGINS", "").split(",")
+origins = [o.strip() for o in origins if o.strip()]
+if not origins:
+    origins = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:12000",
         "http://127.0.0.1:12000",
         "http://localhost:12001",
         "http://127.0.0.1:12001",
-    ],
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+        "http://localhost:5174",
+        "https://rasalilabs.vercel.app",
+    ]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/api/health")
+async def health_check():
+    return {
+        "status": "healthy",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "database": "mock" if db._is_mock else "connected",
+        "ollama": await check_ollama_available()
+    }
 
 api_router = APIRouter(prefix="/api")
 
@@ -355,8 +366,8 @@ class ProjectOut(BaseModel):
     output_format: str
     status: str
     constraints: Optional[Dict[str, Any]] = None
-    created_at: str
-    updated_at: str
+    created_at: Any
+    updated_at: Any
 
 class MeetingCreate(BaseModel):
     project_id: str
@@ -372,7 +383,7 @@ class MeetingOut(BaseModel):
     status: str
     agenda_items: List[str]
     participants: List[str]
-    created_at: str
+    created_at: Any
     summary: Optional[str] = None
 
 class TaskCreate(BaseModel):
@@ -392,7 +403,7 @@ class TaskOut(BaseModel):
     assigned_to: Optional[str] = None
     priority: str
     depends_on: List[str]
-    created_at: str
+    created_at: Any
     output: Optional[str] = None
 
 class MessageCreate(BaseModel):
@@ -415,7 +426,7 @@ class MessageOut(BaseModel):
     thread_type: str
     model_used: Optional[str] = None
     model_mode: Optional[str] = None
-    created_at: str
+    created_at: Any
 
 class DecisionCreate(BaseModel):
     meeting_id: str
@@ -433,7 +444,7 @@ class DecisionOut(BaseModel):
     status: str
     decided_by: str
     votes: Dict[str, str] = {}
-    created_at: str
+    created_at: Any
 
 class VoteCreate(BaseModel):
     agent_role: str
@@ -447,7 +458,7 @@ class ArtifactOut(BaseModel):
     artifact_type: str
     content: Optional[str] = None
     file_path: Optional[str] = None
-    created_at: str
+    created_at: Any
 
 class ExecuteProjectRequest(BaseModel):
     project_id: str
@@ -705,6 +716,7 @@ USER_CHAT_RESPONSES = {
 async def get_agent_response(role: str, context: str, task_type: str = "default") -> dict:
     """Get response from Ollama or simulation.
     Returns {"content": str, "model": str, "routing": str, "mode": str}"""
+    mode = model_config.get("mode", "auto")
     model_name, routing_reason = resolve_model_for(role, task_type)
 
     # Forced simulation mode
@@ -713,8 +725,13 @@ async def get_agent_response(role: str, context: str, task_type: str = "default"
         return {"content": text, "model": "simulation", "routing": routing_reason, "mode": "simulation"}
 
     ollama_available = await check_ollama_available()
+    featherless_available = bool(model_config.get("featherless_api_key"))
 
-    if ollama_available and mode != "featherless":
+    # Determine if we should use Featherless for this specific call
+    is_featherless_model = model_name == model_config["featherless_model"] or model_name.startswith("google/")
+    use_featherless = (mode == "featherless") or (is_featherless_model and featherless_available) or (not ollama_available and featherless_available)
+
+    if ollama_available and not use_featherless:
         try:
             agent = AGENTS.get(role, AGENTS["developer"])
             system_prompt = (
@@ -736,8 +753,8 @@ async def get_agent_response(role: str, context: str, task_type: str = "default"
         except Exception as e:
             logger.warning(f"Ollama call failed for {role} using {model_name}: {e}")
 
-    # Featherless fallback or explicit mode
-    if model_config.get("featherless_api_key") and (mode == "featherless" or not ollama_available):
+    # Featherless route
+    if use_featherless:
         try:
             llm = ChatOpenAI(
                 api_key=model_config["featherless_api_key"],
@@ -815,12 +832,11 @@ async def run_kickoff_meeting(project_id: str, goal: str, output_format: str):
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         messages.append(msg)
+        # Persist immediately for realtime visibility if user joins late
+        await db.messages.insert_one(msg)
         # Broadcast via WebSocket
         await ws_manager.broadcast(project_id, {"type": "message", "data": msg})
-        await asyncio.sleep(0.05)
-    
-    if messages:
-        await db.messages.insert_many(messages)
+        await asyncio.sleep(1.0) # Natural delay for reading
     
     # Create approval decision
     decision_doc = {
@@ -907,39 +923,44 @@ async def execute_project(project_id: str):
         if task["status"] == "completed":
             continue
         
-        await db.tasks.update_one({"id": task["id"]}, {"$set": {"status": "in_progress"}})
-        
-        role = task.get("assigned_to", "developer")
-        task_type = "code" if role in ["developer", "frontend", "backend"] else "default"
-        context = f"Task: {task['title']}. Description: {task['description']}. Project goal: {project['goal']}"
-        
-        response = await get_agent_response(role, context, task_type)
-        
-        # Log execution message
-        msg = {
-            "id": str(uuid.uuid4()),
-            "thread_id": str(uuid.uuid4()),
-            "project_id": project_id,
-            "meeting_id": None,
-            "from_agent": role,
-            "to_agent": None,
-            "content": f"[Task: {task['title']}] {response['content']}",
-            "thread_type": "direct",
-            "model_used": response["model"],
-            "model_mode": response["mode"],
-            "created_at": datetime.now(timezone.utc).isoformat()
-        }
-        await db.messages.insert_one(msg)
-        
-        # Broadcast via WebSocket
-        await ws_manager.broadcast(project_id, {"type": "message", "data": msg})
-        await ws_manager.broadcast(project_id, {"type": "task_update", "data": {"task_id": task["id"], "status": "completed"}})
-        
-        await db.tasks.update_one(
-            {"id": task["id"]},
-            {"$set": {"status": "completed", "output": response["content"]}}
-        )
-        await asyncio.sleep(0.05)
+        try:
+            await db.tasks.update_one({"id": task["id"]}, {"$set": {"status": "in_progress"}})
+            
+            role = task.get("assigned_to", "developer")
+            task_type = "code" if role in ["developer", "frontend", "backend"] else "default"
+            context = f"Task: {task['title']}. Description: {task['description']}. Project goal: {project['goal']}"
+            
+            response = await get_agent_response(role, context, task_type)
+            
+            # Log execution message
+            msg = {
+                "id": str(uuid.uuid4()),
+                "thread_id": str(uuid.uuid4()),
+                "project_id": project_id,
+                "meeting_id": None,
+                "from_agent": role,
+                "to_agent": None,
+                "content": f"[Task: {task['title']}] {response['content']}",
+                "thread_type": "direct",
+                "model_used": response["model"],
+                "model_mode": response["mode"],
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.messages.insert_one(msg)
+            
+            # Broadcast via WebSocket
+            await ws_manager.broadcast(project_id, {"type": "message", "data": msg})
+            await ws_manager.broadcast(project_id, {"type": "task_update", "data": {"task_id": task["id"], "status": "completed"}})
+            
+            await db.tasks.update_one(
+                {"id": task["id"]},
+                {"$set": {"status": "completed", "output": response["content"]}}
+            )
+        except Exception as e:
+            logger.error(f"Task {task['id']} failed: {e}")
+            await db.tasks.update_one({"id": task["id"]}, {"$set": {"status": "failed", "output": str(e)}})
+            
+        await asyncio.sleep(2.0) # Delay for visibility
     
     # Generate artifacts
     await generate_artifacts(project_id, project["goal"], project["output_format"])
@@ -950,153 +971,175 @@ async def execute_project(project_id: str):
         {"$set": {"status": "completed", "updated_at": datetime.now(timezone.utc).isoformat()}}
     )
 
+def parse_multi_file_content(content: str) -> List[Dict[str, str]]:
+    """Parses a string containing multiple files marked with [FILE: filename] tags."""
+    import re
+    files = []
+    # Pattern to match [FILE: filename.ext] followed by content
+    pattern = r'\[FILE:\s*([^\]\s]+)\]'
+    
+    # Split by the pattern, but keep the filenames
+    parts = re.split(pattern, content)
+    
+    if len(parts) <= 1:
+        # Fallback to index.html if no tags found
+        return [{"name": "index.html", "content": content.strip()}]
+        
+    # parts[0] is everything before the first tag (usually empty)
+    # parts[1] is the first filename, parts[2] is its content, and so on.
+    for i in range(1, len(parts), 2):
+        filename = parts[i].strip()
+        file_content = parts[i+1].strip()
+        if file_content:
+            # Clean up potential markdown wrapping in the file content
+            if file_content.startswith("```"):
+                lines = file_content.splitlines()
+                if lines[0].startswith("```"):
+                    file_content = "\n".join(lines[1:])
+                if file_content.endswith("```"):
+                    file_content = file_content[:-3]
+            files.append({"name": filename, "content": file_content.strip()})
+        
+    return files
+
 async def generate_artifacts(project_id: str, goal: str, output_format: str):
-    """Generate output artifacts based on format."""
+    """Generate output artifacts based on format using LLM synthesis."""
     now = datetime.now(timezone.utc).isoformat()
+    
+    # 1. Fetch all task outputs to use as context
+    tasks = await db.tasks.find({"project_id": project_id, "status": "completed"}).to_list(100)
+    task_context = "\n".join([f"Task [{t['title']}]: {t['output']}" for t in tasks])
+    
+    # 2. Use LLM to synthesize the final artifact
+    prompt = f"""
+    You are the Lead Systems Architect. Your goal is to synthesize the final project deliverable.
+    
+    PROJECT GOAL: {goal}
+    REQUESTED FORMAT: {output_format}
+    
+    COMPLETED AGENT TASKS:
+    {task_context}
+    
+    TASK: Generate the final high-quality output for this project. 
+    If the project requires multiple pages (e.g. multi-page website), generate ALL necessary HTML files.
+    Use the following format for multiple files:
+    [FILE: filename.html]
+    ... content ...
+    
+    [FILE: filename2.html]
+    ... content ...
+    
+    For a single file project, use [FILE: index.html].
+    
+    IMPORTANT: 
+    1. The design should be premium, modern, and high-end. 
+    2. Use actual content from the tasks above.
+    3. If there is a logo available, it will be at './logo.png'. Use it in your designs (e.g. <img src="logo.png" alt="Logo">).
+    4. Ensure all links between pages work (e.g. <a href="about.html">).
+    5. For styling, use high-end CSS (Glassmorphism, gradients, modern fonts).
+    6. Ensure the website is fully responsive.
+    
+    OUTPUT ONLY THE RAW CONTENT WITH [FILE: ...] TAGS.
+    """
+    
+    # Use Featherless for synthesis
+    html_content = ""
+    backend_code = ""
+    try:
+        logger.info(f"Synthesizing artifacts for project {project_id}...")
+        llm = ChatOpenAI(
+            api_key=model_config["featherless_api_key"],
+            model=model_config["featherless_model"],
+            base_url=model_config["featherless_base_url"],
+            max_tokens=4000
+        )
+        response = await asyncio.to_thread(llm.invoke, prompt)
+        raw_synthesis = response.content.strip()
+        generated_files = parse_multi_file_content(raw_synthesis)
+        
+        # We'll use the first HTML file as the primary one for PNG/PDF if needed
+        html_content = ""
+        for f in generated_files:
+            if f["name"] == "index.html":
+                html_content = f["content"]
+                break
+        if not html_content and generated_files:
+            html_content = generated_files[0]["content"]
+        
+        
+        # PHASE 2: Generate Python Backend
+        logger.info(f"Synthesizing backend code for project {project_id}...")
+        backend_prompt = f"""
+        You are a Senior Backend Engineer. Based on the project goal and the agent task results below, 
+        create a robust Python FastAPI backend script.
+        
+        GOAL: {goal}
+        FORMAT: {output_format}
+        
+        TASK RESULTS:
+        {chr(10).join([f"- {t['title']}: {t['output']}" for t in tasks])}
+        
+        Provide the full, production-ready app.py code. 
+        Include:
+        1. Essential models (Pydantic).
+        2. API endpoints matching the UI's needs (e.g., contact forms, data retrieval).
+        3. Simple in-memory or SQLite storage logic.
+        4. Modern FastAPI best practices.
+        
+        Output ONLY the raw code, no markdown wrappers.
+        """
+        backend_response = await asyncio.to_thread(llm.invoke, backend_prompt)
+        backend_code = backend_response.content.strip()
+        if backend_code.startswith("```python"):
+            backend_code = backend_code[9:]
+        elif backend_code.startswith("```"):
+            backend_code = backend_code[3:]
+        if backend_code.endswith("```"):
+            backend_code = backend_code[:-3]
+        backend_code = backend_code.strip()
+
+        logger.info(f"Synthesis successful for project {project_id}")
+    except Exception as e:
+        logger.error(f"Synthesis failed for project {project_id}: {e}", exc_info=True)
+        html_content = f"<h1>{goal}</h1><p>Synthesis failed: {str(e)}</p><p>Check individual task outputs for details.</p>"
+        backend_code = f"# Synthesis failed for project {project_id}\n# Error: {str(e)}"
+
     artifacts = []
-    
+    now = datetime.now()
     fmt = output_format.lower()
-    html_content = None
+    is_web_project = "html" in fmt or "web" in fmt
     
-    if "html" in fmt or fmt == "html" or "png" in fmt or "pdf" in fmt:
-        html_content = f"""<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{goal[:50]}</title>
-    <link href="https://fonts.googleapis.com/css2?family=Chivo:wght@300;400;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-    <style>
-        :root {{
-            --bg-app: #0A0A0A;
-            --bg-panel: #111111;
-            --accent-primary: #0030FF;
-            --text-primary: #FFFFFF;
-            --text-secondary: #A1A1AA;
-            --border-default: #222222;
-        }}
-        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
-        body {{ 
-            font-family: 'IBM Plex Sans', sans-serif; 
-            background: var(--bg-app); 
-            color: var(--text-primary);
-            overflow-x: hidden;
-        }}
-        .container {{
-            max-width: 1200px;
-            margin: 0 auto;
-            padding: 4rem 2rem;
-        }}
-        .logo-section {{
-            display: flex;
-            align-items: center;
-            gap: 1rem;
-            margin-bottom: 4rem;
-        }}
-        .logo-box {{
-            width: 48px;
-            height: 48px;
-            background: var(--accent-primary);
-            border: 1px solid var(--text-primary);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: bold;
-            font-size: 1.5rem;
-        }}
-        .logo-text {{
-            font-family: 'Chivo', sans-serif;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-            font-size: 1.25rem;
-            text-transform: uppercase;
-        }}
-        .hero {{ 
-            display: flex; 
-            flex-direction: column; 
-            align-items: flex-start; 
-            justify-content: center;
-            border-left: 2px solid var(--accent-primary);
-            padding-left: 2rem;
-        }}
-        h1 {{ 
-            font-family: 'Chivo', sans-serif;
-            font-size: 4rem; 
-            line-height: 1.1;
-            margin-bottom: 1.5rem; 
-            letter-spacing: -0.04em;
-        }}
-        p {{ 
-            font-size: 1.5rem; 
-            color: var(--text-secondary); 
-            max-width: 800px; 
-            line-height: 1.5; 
-            margin-bottom: 3rem;
-        }}
-        .meta {{
-            font-family: 'JetBrains Mono', monospace;
-            font-size: 0.75rem;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            margin-top: 4rem;
-            display: flex;
-            gap: 2rem;
-        }}
-        .cta {{ 
-            padding: 1rem 2.5rem; 
-            background: var(--accent-primary); 
-            color: white; 
-            border: none; 
-            border-radius: 2px; 
-            font-size: 1rem; 
-            font-weight: 600;
-            cursor: pointer; 
-            transition: all 0.2s ease;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-        }}
-        .cta:hover {{ background: #0025CC; transform: translateY(-2px); }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="logo-section">
-            <div class="logo-box">RA</div>
-            <div class="logo-text">Ras Ali Labs</div>
-        </div>
-        <div class="hero">
-            <h1>{goal[:80]}</h1>
-            <p>This deliverable was architected, designed, and implemented by the Ras Ali Labs autonomous workflow ecosystem.</p>
-            <button class="cta">Explore Solution</button>
-        </div>
-        <div class="meta">
-            <span>Project ID: {project_id[:8]}</span>
-            <span>Generated At: {datetime.now().strftime('%Y-%m-%d %H:%M')}</span>
-            <span>Engine: V1.5.0-STABLE</span>
-        </div>
-    </div>
-</body>
-</html>"""
-        if "html" in fmt or fmt == "html" or "png" in fmt or "pdf" in fmt:
-            artifacts.append({
-                "id": str(uuid.uuid4()),
-                "project_id": project_id,
-                "task_id": None,
-                "name": "output.html",
-                "artifact_type": "html",
-                "content": html_content,
-                "file_path": None,
-                "created_at": now
-            })
+    # Add all generated files
+    for f in generated_files:
+        artifacts.append({
+            "id": str(uuid.uuid4()),
+            "project_id": project_id,
+            "task_id": None,
+            "name": f["name"],
+            "artifact_type": "html" if f["name"].endswith(".html") else "code",
+            "content": f["content"],
+            "file_path": None,
+            "created_at": now
+        })
     
+    # Add Backend Code ONLY for HTML/Web projects
+    if is_web_project and backend_code:
+        artifacts.append({
+            "id": str(uuid.uuid4()),
+            "project_id": project_id,
+            "task_id": None,
+            "name": "app.py",
+            "artifact_type": "code",
+            "content": backend_code,
+            "file_path": None,
+            "created_at": now
+        })
+
     # PNG generation from HTML
     if ("png" in fmt or fmt == "png") and html_content:
         try:
             png_path = await render_html_to_png(html_content, project_id)
             if png_path:
-                # Read PNG and encode as base64 for storage
                 with open(png_path, "rb") as f:
                     png_b64 = base64.b64encode(f.read()).decode()
                 artifacts.append({
@@ -1150,49 +1193,6 @@ async def generate_artifacts(project_id: str, goal: str, output_format: str):
         except Exception as e:
             logger.error(f"Featherless video generation failed: {e}")
     
-    if "json" in fmt or fmt == "json":
-        json_content = json.dumps({
-            "project_goal": goal,
-            "status": "completed",
-            "generated_at": now,
-            "output_format": output_format,
-            "deliverables": ["Project completed successfully by the AI Company team."]
-        }, indent=2)
-        artifacts.append({
-            "id": str(uuid.uuid4()),
-            "project_id": project_id,
-            "task_id": None,
-            "name": "output.json",
-            "artifact_type": "json",
-            "content": json_content,
-            "file_path": None,
-            "created_at": now
-        })
-    
-    if "code" in fmt or "js" in fmt or "py" in fmt:
-        code_content = f"""# Auto-generated code artifact
-# Project: {goal}
-# Generated by AI Company Workflow Engine
-
-def main():
-    print("Project: {goal[:60]}")
-    print("Status: Completed")
-    print("Generated by autonomous AI workflow")
-
-if __name__ == "__main__":
-    main()
-"""
-        artifacts.append({
-            "id": str(uuid.uuid4()),
-            "project_id": project_id,
-            "task_id": None,
-            "name": "output.py",
-            "artifact_type": "code",
-            "content": code_content,
-            "file_path": None,
-            "created_at": now
-        })
-    
     # Always generate a summary JSON
     artifacts.append({
         "id": str(uuid.uuid4()),
@@ -1204,7 +1204,7 @@ if __name__ == "__main__":
             "project_goal": goal,
             "output_format": output_format,
             "status": "delivered",
-            "timestamp": now
+            "timestamp": now.isoformat()
         }, indent=2),
         "file_path": None,
         "created_at": now
@@ -1216,23 +1216,32 @@ if __name__ == "__main__":
 async def render_html_to_png(html_content: str, project_id: str) -> str:
     """Render HTML to PNG using Playwright."""
     try:
-        # Set Playwright browsers path if it exists, otherwise use default
-        pw_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")
-        if not pw_path and os.path.exists("/pw-browsers"):
-            os.environ["PLAYWRIGHT_BROWSERS_PATH"] = "/pw-browsers"
-        elif not pw_path and os.name == 'nt':
-            # On Windows, we typically rely on default locations or user-specified ones
-            pass
         from playwright.async_api import async_playwright
         png_path = str(ARTIFACTS_DIR / f"{project_id}_output.png")
         
+        # To support relative assets like logo.png, we write to a temp file in ARTIFACTS_DIR
+        temp_html = ARTIFACTS_DIR / f"temp_{project_id}.html"
+        with open(temp_html, "w", encoding="utf-8") as f:
+            f.write(html_content)
+            
         async with async_playwright() as p:
             browser = await p.chromium.launch(headless=True)
             page = await browser.new_page(viewport={"width": 1280, "height": 720})
-            await page.set_content(html_content, wait_until="networkidle")
+            
+            # Go to the file instead of set_content to allow relative paths
+            await page.goto(f"file:///{str(temp_html).replace('\\', '/')}")
+            
+            # Wait for content to load and potential animations to settle
+            await page.wait_for_load_state("networkidle")
+            await asyncio.sleep(2) # Extra buffer for animations
+            
             await page.screenshot(path=png_path, full_page=True)
             await browser.close()
-        
+            
+        # Clean up temp file
+        if temp_html.exists():
+            temp_html.unlink()
+            
         return png_path
     except Exception as e:
         logger.error(f"Playwright PNG render failed: {e}")
@@ -1561,11 +1570,22 @@ async def get_decisions(project_id: Optional[str] = Query(None), status: Optiona
 # ─── Artifacts ───
 @api_router.get("/artifacts", response_model=List[ArtifactOut])
 async def get_artifacts(project_id: Optional[str] = Query(None)):
-    query = {}
-    if project_id:
-        query["project_id"] = project_id
-    docs = await db.artifacts.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
-    return docs
+    try:
+        query = {}
+        if project_id:
+            query["project_id"] = project_id
+        docs = await db.artifacts.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+        # Ensure all docs have the required fields for ArtifactOut
+        for doc in docs:
+            if "id" not in doc: doc["id"] = str(uuid.uuid4())
+            if "created_at" not in doc: doc["created_at"] = datetime.now(timezone.utc).isoformat()
+            # If created_at is a datetime object, convert to string for safety
+            if isinstance(doc.get("created_at"), datetime):
+                doc["created_at"] = doc["created_at"].isoformat()
+        return docs
+    except Exception as e:
+        logger.error(f"Error fetching artifacts: {e}", exc_info=True)
+        raise HTTPException(500, f"Internal Server Error: {str(e)}")
 
 @api_router.get("/artifacts/{artifact_id}")
 async def get_artifact(artifact_id: str):
@@ -1583,6 +1603,17 @@ async def execute_project_route(req: ExecuteProjectRequest):
     
     asyncio.create_task(execute_project(req.project_id))
     return {"status": "execution_started", "project_id": req.project_id}
+
+@api_router.post("/projects/{project_id}/resynthesize")
+async def resynthesize_artifacts(project_id: str):
+    """Re-run the artifact synthesis without re-executing tasks."""
+    project = await db.projects.find_one({"id": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(404, "Project not found")
+    
+    # Run synthesis
+    await generate_artifacts(project_id, project["goal"], project["output_format"])
+    return {"status": "resynthesis_complete", "project_id": project_id}
 
 # ─── Stats ───
 @api_router.get("/stats")
@@ -1668,8 +1699,8 @@ async def update_model_config(req: ModelConfigUpdate):
         model_config["ollama_url"] = req.ollama_url
         _ollama_cache["available"] = None  # reset cache
     if req.mode is not None:
-        if req.mode not in ("auto", "llama_only", "qwen_only", "simulation"):
-            raise HTTPException(400, "mode must be: auto, llama_only, qwen_only, or simulation")
+        if req.mode not in ("auto", "llama_only", "qwen_only", "featherless", "simulation"):
+            raise HTTPException(400, "mode must be: auto, llama_only, qwen_only, featherless, or simulation")
         model_config["mode"] = req.mode
     if req.role_overrides is not None:
         model_config["role_overrides"] = req.role_overrides
@@ -1705,12 +1736,35 @@ async def pull_model(req: ModelPullRequest):
     except Exception as e:
         raise HTTPException(500, str(e))
 
-@api_router.get("/models/test/{model_name}")
+@api_router.get("/models/test/{model_name:path}")
 async def test_model(model_name: str):
     """Quick test a specific model with a simple prompt."""
     ollama_ok = await check_ollama_available()
+    featherless_available = bool(model_config.get("featherless_api_key"))
+    
+    is_featherless = model_name.startswith("google/") or model_name == model_config.get("featherless_model")
+    
+    if is_featherless and featherless_available:
+        try:
+            llm = ChatOpenAI(
+                api_key=model_config["featherless_api_key"],
+                model=model_name,
+                base_url=model_config["featherless_base_url"],
+                max_tokens=50
+            )
+            response = await asyncio.to_thread(llm.invoke, "Say hello in one sentence.")
+            return {
+                "status": "ok",
+                "response": response.content.strip(),
+                "model": model_name,
+                "engine": "Featherless AI"
+            }
+        except Exception as e:
+            return {"status": "error", "detail": f"Featherless test failed: {str(e)}"}
+
     if not ollama_ok:
         return {"status": "error", "detail": "Ollama not available", "mode": "simulation"}
+    
     try:
         async with httpx.AsyncClient(timeout=30.0) as c:
             r = await c.post(f"{model_config['ollama_url']}/api/generate", json={
@@ -1726,6 +1780,7 @@ async def test_model(model_name: str):
                     "response": resp.get("response", "").strip()[:200],
                     "total_duration_ms": resp.get("total_duration", 0) / 1_000_000,
                     "eval_count": resp.get("eval_count", 0),
+                    "engine": "Ollama"
                 }
             return {"status": "error", "detail": f"HTTP {r.status_code}: {r.text[:200]}"}
     except Exception as e:
@@ -2091,9 +2146,7 @@ async def websocket_endpoint(websocket: WebSocket, project_id: str):
 
 # CORS is handled at the top of the file to ensure it captures all requests.
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
+# Startup/Shutdown logic is now handled in the lifespan context manager at top.
 
 if __name__ == "__main__":
     import uvicorn
