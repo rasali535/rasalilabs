@@ -83,6 +83,28 @@ class APITester:
             self.log_test("Health Check", False, str(e))
             return False
 
+    def test_logo_endpoint(self):
+        """Test GET /api/logo"""
+        try:
+            response = requests.get(f"{self.api_url}/logo", timeout=10)
+            success = response.status_code == 200
+            
+            if success:
+                content_type = response.headers.get("Content-Type", "")
+                if "image/png" in content_type:
+                    details = f"Logo found, Content-Type: {content_type}"
+                else:
+                    success = False
+                    details = f"Unexpected Content-Type: {content_type}"
+            else:
+                details = f"HTTP {response.status_code}"
+            
+            self.log_test("Logo Endpoint", success, details)
+            return success
+        except Exception as e:
+            self.log_test("Logo Endpoint", False, str(e))
+            return False
+
     def test_agents_endpoint(self):
         """Test GET /api/agents - should return 8 agents"""
         try:
@@ -837,6 +859,7 @@ class APITester:
         
         # Core endpoints
         self.test_health_endpoint()
+        self.test_logo_endpoint()
         self.test_agents_endpoint()
         self.test_stats_endpoint()
         

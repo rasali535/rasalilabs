@@ -12,7 +12,7 @@ import {
   TrendingUp,
   FileOutput,
 } from "lucide-react";
-import { getStats, getProjects, createProject, getAgents, AGENT_META } from "@/lib/api";
+import { getStats, getProjects, createProject, getAgents, AGENT_META, getLogoUrl } from "@/lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -75,13 +75,20 @@ export default function Dashboard() {
     <div className="h-full flex flex-col bg-[#0A0A0A]" data-testid="dashboard-page">
       {/* Header */}
       <div className="px-6 py-4 border-b border-[#222222] flex items-center justify-between shrink-0">
-        <div>
-          <h1 className="font-['Chivo'] text-xl font-bold tracking-tight text-white" data-testid="dashboard-title">
-            Command Center
-          </h1>
-          <p className="text-xs text-zinc-500 mt-0.5 font-mono uppercase tracking-wider">
-            Ras Ali Labs | AI Workflow Engine
-          </p>
+        <div className="flex items-center gap-4">
+          <img 
+            src={getLogoUrl()} 
+            alt="Ras Ali Labs" 
+            className="w-10 h-10 object-contain"
+          />
+          <div>
+            <h1 className="font-['Chivo'] text-xl font-bold tracking-tight text-white" data-testid="dashboard-title">
+              Command Center
+            </h1>
+            <p className="text-xs text-zinc-500 mt-0.5 font-mono uppercase tracking-wider">
+              Ras Ali Labs | AI Workflow Engine
+            </p>
+          </div>
         </div>
         <button
           onClick={() => setShowNewProject(true)}

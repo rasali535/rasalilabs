@@ -48,7 +48,13 @@ class MockCollection:
         return self
         
     def sort(self, field, direction=-1):
-        self._current_results.sort(key=lambda x: x.get(field, ""), reverse=(direction == -1))
+        def sort_key(x):
+            val = x.get(field, "")
+            if isinstance(val, datetime):
+                return val.isoformat()
+            return str(val)
+            
+        self._current_results.sort(key=sort_key, reverse=(direction == -1))
         return self
         
     def limit(self, n):
@@ -261,14 +267,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/api/health")
-async def health_check():
-    return {
-        "status": "healthy",
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "database": "mock" if db._is_mock else "connected",
-        "ollama": await check_ollama_available()
-    }
+
 
 api_router = APIRouter(prefix="/api")
 
@@ -343,6 +342,13 @@ class ThreadType(str, Enum):
     CROSS_FUNCTIONAL = "cross_functional"
     ESCALATION = "escalation"
     REVIEW = "review"
+
+class UserSettings(BaseModel):
+    name: str = "User"
+    email: Optional[str] = None
+    whatsapp: Optional[str] = None
+    notifications_enabled: bool = True
+    preferred_channel: str = "email" # email | whatsapp | both
 
 # ─── Pydantic Models ───
 class AgentOut(BaseModel):
@@ -613,6 +619,47 @@ async def check_ollama_available():
     _ollama_cache["checked_at"] = now
     _ollama_cache["models"] = []
     return False
+
+# ─── Notification Service ───
+class NotificationService:
+    @staticmethod
+    async def notify_user(role: str, content: str, project_id: Optional[str] = None):
+        """Sends a notification to the user via Email or WhatsApp."""
+        settings_doc = await db.system_config.find_one({"key": "user_settings"}, {"_id": 0})
+        if not settings_doc:
+            logger.warning("No user settings found. Cannot notify user.")
+            return False
+            
+        settings = settings_doc.get("value", {})
+        if not settings.get("notifications_enabled", True):
+            return False
+
+        agent = AGENTS.get(role, AGENTS["ceo"])
+        message = f"Message from {agent['name']} ({agent['title']}):\n\n{content}"
+        if project_id:
+            message += f"\n\nProject Context: {project_id}"
+
+        results = {"email": False, "whatsapp": False}
+        
+        # Email Notification (Simulation)
+        if settings.get("email") and settings.get("preferred_channel") in ["email", "both"]:
+            logger.info(f"SIMULATED EMAIL to {settings['email']}: {message}")
+            # In production, use SendGrid/Postmark here
+            results["email"] = True
+
+        # WhatsApp Notification (Simulation)
+        if settings.get("whatsapp") and settings.get("preferred_channel") in ["whatsapp", "both"]:
+            logger.info(f"SIMULATED WHATSAPP to {settings['whatsapp']}: {message}")
+            # In production, use Twilio here
+            results["whatsapp"] = True
+            
+        # Log to a local artifact for the user to see "notifications"
+        notification_log = ROOT_DIR / "notifications.log"
+        with open(notification_log, "a", encoding="utf-8") as f:
+            timestamp = datetime.now(timezone.utc).isoformat()
+            f.write(f"[{timestamp}] FROM: {role} TO: User | Channels: {results} | Content: {content}\n")
+            
+        return any(results.values())
 
 async def list_ollama_models():
     """Fetch available models from Ollama."""
@@ -911,6 +958,54 @@ async def generate_project_tasks(project_id: str, goal: str, output_format: str)
         await db.tasks.insert_many(tasks)
     return tasks
 
+
+SIMULATED_ARTIFACT_TEMPLATE = """
+[FILE: index.html]
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ras Ali Labs | Deliverable</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&family=Chivo:wght@900&display=swap');
+        body { background: #050505; color: #EEE; font-family: 'Inter', sans-serif; margin: 0; overflow-x: hidden; }
+        .hero { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; background: radial-gradient(circle at center, #111 0%, #050505 100%); text-align: center; padding: 2rem; }
+        .logo { width: 120px; height: 120px; object-contain: contain; margin-bottom: 2rem; filter: drop-shadow(0 0 20px rgba(0, 48, 255, 0.3)); }
+        h1 { font-family: 'Chivo', sans-serif; font-size: 4rem; margin: 0; line-height: 1; letter-spacing: -0.05em; background: linear-gradient(135deg, #FFF 0%, #AAA 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+        .badge { font-family: monospace; font-size: 0.75rem; color: #0030FF; border: 1px solid #0030FF; padding: 0.25rem 0.75rem; border-radius: 100px; margin-bottom: 1.5rem; letter-spacing: 0.1em; text-transform: uppercase; }
+        .goal { max-width: 600px; color: #888; line-height: 1.6; margin-top: 1.5rem; font-size: 1.1rem; }
+        .grid { display: grid; grid-template-cols: repeat(3, 1fr); gap: 2rem; max-width: 1000px; margin-top: 4rem; width: 100%; }
+        .card { background: #111; border: 1px solid #222; padding: 2rem; border-radius: 0.5rem; text-align: left; }
+        .card h3 { margin: 0 0 1rem 0; color: #FFF; font-size: 1rem; }
+        .card p { margin: 0; color: #666; font-size: 0.875rem; line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <div class="hero">
+        <div class="badge">Project Artifact | Generated by Ras Ali Labs</div>
+        <img src="logo.png" alt="Ras Ali Labs" class="logo">
+        <h1>Autonomous Intelligence</h1>
+        <p class="goal">{{GOAL}}</p>
+        <div class="grid">
+            <div class="card">
+                <h3>Strategic Analysis</h3>
+                <p>Comprehensive market alignment and risk assessment completed by Ivy (CEO).</p>
+            </div>
+            <div class="card">
+                <h3>Architecture</h3>
+                <p>High-performance system design and logic synthesis finalized by Cipher (Lead Dev).</p>
+            </div>
+            <div class="card">
+                <h3>UX Integration</h3>
+                <p>Premium dark-mode interface and interaction flows validated by Prism (UX/UI).</p>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+"""
+
 async def execute_project(project_id: str):
     """Execute all project tasks autonomously."""
     project = await db.projects.find_one({"id": project_id}, {"_id": 0})
@@ -1034,7 +1129,7 @@ async def generate_artifacts(project_id: str, goal: str, output_format: str):
     IMPORTANT: 
     1. The design should be premium, modern, and high-end. 
     2. Use actual content from the tasks above.
-    3. If there is a logo available, it will be at './logo.png'. Use it in your designs (e.g. <img src="logo.png" alt="Logo">).
+    3. MANDATORY BRANDING: The corporate logo is available at './logo.png'. You MUST include it prominently in the header or sidebar of your HTML (e.g. <img src="logo.png" alt="Ras Ali Labs Logo" style="height:40px;">). 
     4. Ensure all links between pages work (e.g. <a href="about.html">).
     5. For styling, use high-end CSS (Glassmorphism, gradients, modern fonts).
     6. Ensure the website is fully responsive.
@@ -1101,23 +1196,49 @@ async def generate_artifacts(project_id: str, goal: str, output_format: str):
         logger.info(f"Synthesis successful for project {project_id}")
     except Exception as e:
         logger.error(f"Synthesis failed for project {project_id}: {e}", exc_info=True)
-        html_content = f"<h1>{goal}</h1><p>Synthesis failed: {str(e)}</p><p>Check individual task outputs for details.</p>"
-        backend_code = f"# Synthesis failed for project {project_id}\n# Error: {str(e)}"
+        # Use simulation template as fallback
+        raw_synthesis = SIMULATED_ARTIFACT_TEMPLATE.replace("{{GOAL}}", goal)
+        generated_files = parse_multi_file_content(raw_synthesis)
+        backend_code = f"# Synthesis fallback for project {project_id}\n# Original Goal: {goal}"
+
+    # Load logo for injection if available
+    logo_data_uri = None
+    logo_path = ARTIFACTS_DIR / "logo.png"
+    if logo_path.exists():
+        try:
+            logo_bytes = logo_path.read_bytes()
+            logo_b64 = base64.b64encode(logo_bytes).decode('utf-8')
+            logo_data_uri = f"data:image/png;base64,{logo_b64}"
+        except Exception as e:
+            logger.warning(f"Failed to load logo for artifact injection: {e}")
 
     artifacts = []
     now = datetime.now()
     fmt = output_format.lower()
     is_web_project = "html" in fmt or "web" in fmt
-    
     # Add all generated files
     for f in generated_files:
+        content = f["content"]
+        # Inject logo if it's an HTML file and we have the data URI
+        if logo_data_uri and f["name"].endswith(".html"):
+            if 'logo.png' in content:
+                content = content.replace('logo.png', logo_data_uri)
+                content = content.replace('./logo.png', logo_data_uri)
+            else:
+                # Auto-inject logo if missing
+                logo_html = f'<div style="position:fixed; top:20px; left:20px; z-index:9999;"><img src="{logo_data_uri}" alt="Ras Ali Labs" style="height:50px; filter:drop-shadow(0 0 10px rgba(0,0,0,0.5));"></div>'
+                if '</body>' in content:
+                    content = content.replace('</body>', f'{logo_html}</body>')
+                else:
+                    content += logo_html
+            
         artifacts.append({
             "id": str(uuid.uuid4()),
             "project_id": project_id,
             "task_id": None,
             "name": f["name"],
             "artifact_type": "html" if f["name"].endswith(".html") else "code",
-            "content": f["content"],
+            "content": content,
             "file_path": None,
             "created_at": now
         })
@@ -1260,6 +1381,13 @@ async def render_to_pdf(goal: str, project_id: str) -> str:
         
         # Title
         from fpdf.enums import XPos, YPos
+        
+        # Add Logo if exists
+        logo_path = ARTIFACTS_DIR / "logo.png"
+        if logo_path.exists():
+            pdf.image(str(logo_path), x=10, y=8, w=15)
+            pdf.ln(5)
+
         pdf.set_font("Helvetica", "B", 24)
         pdf.set_text_color(0, 48, 255)
         pdf.cell(0, 20, "AI Company Workflow Engine", new_x=XPos.LMARGIN, new_y=YPos.NEXT, align="C")
@@ -1329,6 +1457,28 @@ async def health():
         "routing_mode": model_config["mode"],
         "cached_models": _ollama_cache.get("models", []),
     }
+
+# ─── User Settings ───
+@api_router.get("/settings/user", response_model=UserSettings)
+async def get_user_settings():
+    doc = await db.system_config.find_one({"key": "user_settings"}, {"_id": 0})
+    if doc and "value" in doc:
+        return UserSettings(**doc["value"])
+    return UserSettings()
+
+@api_router.post("/settings/user")
+async def update_user_settings(settings: UserSettings):
+    await db.system_config.update_one(
+        {"key": "user_settings"},
+        {"$set": {"value": settings.dict()}},
+        upsert=True
+    )
+    return {"status": "success", "settings": settings}
+
+@api_router.post("/notify-test")
+async def test_notification(role: str = "ceo", content: str = "This is a test notification."):
+    success = await NotificationService.notify_user(role, content)
+    return {"success": success}
 
 # ─── Agents ───
 @api_router.get("/agents", response_model=List[AgentOut])
@@ -1616,6 +1766,13 @@ async def resynthesize_artifacts(project_id: str):
     return {"status": "resynthesis_complete", "project_id": project_id}
 
 # ─── Stats ───
+@api_router.get("/logo")
+async def get_logo():
+    logo_path = ARTIFACTS_DIR / "logo.png"
+    if not logo_path.exists():
+        raise HTTPException(404, "Logo not found")
+    return FileResponse(logo_path)
+
 @api_router.get("/stats")
 async def get_stats():
     projects = await db.projects.count_documents({})

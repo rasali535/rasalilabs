@@ -9,7 +9,10 @@ import {
   DollarSign,
   Cpu,
   Zap,
+  MessageCircle,
+  Mail
 } from "lucide-react";
+import { getLogoUrl } from "@/lib/api";
 
 const NAV_ITEMS = [
   { path: "/", label: "Dashboard", icon: LayoutDashboard, testId: "nav-dashboard" },
@@ -31,12 +34,21 @@ export default function Sidebar() {
       className="w-[200px] h-screen flex flex-col bg-[#0A0A0A] border-r border-[#222222] shrink-0"
     >
       {/* Logo */}
-      <div className="px-4 py-4 border-b border-[#222222] flex items-center gap-2">
-        <div className="w-7 h-7 rounded-sm bg-[#0030FF] flex items-center justify-center">
-          <Zap className="w-4 h-4 text-white" />
+      <div className="px-4 py-4 border-b border-[#222222] flex items-center gap-3">
+        <img 
+          src={getLogoUrl()} 
+          alt="Ras Ali Labs" 
+          className="w-8 h-8 object-contain"
+          onError={(e) => {
+            e.target.style.display = 'none';
+            e.target.nextSibling.style.display = 'flex';
+          }}
+        />
+        <div className="w-8 h-8 rounded-sm bg-[#0030FF] hidden items-center justify-center shrink-0">
+          <Zap className="w-5 h-5 text-white" />
         </div>
         <span
-          className="font-['Chivo'] text-xs font-bold tracking-widest text-white uppercase"
+          className="font-['Chivo'] text-[13px] font-bold tracking-tight text-white"
           data-testid="app-logo-text"
         >
           Ras Ali Labs
@@ -68,8 +80,8 @@ export default function Sidebar() {
         })}
       </nav>
 
-      {/* Status footer */}
-      <div className="px-4 py-3 border-t border-[#222222]">
+      {/* Status & Contact footer */}
+      <div className="px-4 py-4 border-t border-[#222222] flex flex-col gap-3">
         <div className="flex items-center gap-2">
           <span className="status-dot status-active pulse-dot" />
           <span
@@ -78,6 +90,28 @@ export default function Sidebar() {
           >
             System Active
           </span>
+        </div>
+        
+        <div className="bg-[#111111] border border-[#222222] rounded-sm p-3">
+          <p className="text-[10px] text-zinc-400 font-mono uppercase mb-2">Need Clarity?</p>
+          <div className="flex flex-col gap-2">
+            <a 
+              href="https://wa.me/26777150423" 
+              target="_blank" 
+              rel="noopener noreferrer"
+              className="flex items-center gap-2 text-xs text-zinc-300 hover:text-white transition-colors"
+            >
+              <MessageCircle className="w-3.5 h-3.5 text-[#25D366]" />
+              WhatsApp Me
+            </a>
+            <a 
+              href="mailto:rasali@themaplin.com" 
+              className="flex items-center gap-2 text-xs text-zinc-300 hover:text-white transition-colors"
+            >
+              <Mail className="w-3.5 h-3.5 text-zinc-400" />
+              Email Me
+            </a>
+          </div>
         </div>
       </div>
     </aside>
