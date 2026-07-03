@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || window.location.origin.replace(":3000", ":12000");
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || window.location.origin.replace(":3000", ":4001");
 const API = `${BACKEND_URL}/api`;
 
 const api = axios.create({ baseURL: API });
@@ -66,7 +66,8 @@ export const downloadArtifact = (id) => `${API}/artifacts/${id}/download`;
 
 // ─── WebSocket ───
 export const getWsUrl = (projectId) => {
-  const wsBase = process.env.REACT_APP_BACKEND_URL
+  const base = BACKEND_URL || window.location.origin.replace(":3000", ":12000");
+  const wsBase = base
     .replace("https://", "wss://")
     .replace("http://", "ws://");
   return `${wsBase}/api/ws/${projectId}`;

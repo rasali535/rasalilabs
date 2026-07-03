@@ -10,7 +10,8 @@ import {
   Cpu,
   Zap,
   MessageCircle,
-  Mail
+  Mail,
+  Brain
 } from "lucide-react";
 import { getLogoUrl } from "@/lib/api";
 
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   { path: "/approvals", label: "Approvals", icon: ShieldCheck, testId: "nav-approvals" },
   { path: "/projects", label: "Projects", icon: FolderOpen, testId: "nav-projects" },
   { path: "/budget", label: "Budget", icon: DollarSign, testId: "nav-budget" },
+  { path: "/memory", label: "Memory", icon: Brain, testId: "nav-memory" },
   { path: "/models", label: "Models", icon: Cpu, testId: "nav-models" },
 ];
 

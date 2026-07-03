@@ -16,8 +16,25 @@ from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone
 from enum import Enum
-from langchain_openai import ChatOpenAI
 from openai import OpenAI
+
+def _make_aiml_client() -> OpenAI:
+    """Create a configured AI/ML API client."""
+    return OpenAI(
+        base_url=model_config["aiml_base_url"],
+        api_key=model_config["aiml_api_key"],
+    )
+
+def _aiml_chat(messages: list, max_tokens: int = 512, model: str = None) -> str:
+    """Synchronous helper: call AI/ML API and return the text response.
+    Uses model_config['aiml_model'] by default; pass model= to override."""
+    client = _make_aiml_client()
+    resp = client.chat.completions.create(
+        model=model or model_config["aiml_model"],
+        messages=messages,
+        max_tokens=max_tokens,
+    )
+    return resp.choices[0].message.content
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -211,17 +228,115 @@ QWEN_MODEL = os.environ.get('QWEN_MODEL', 'qwen2.5-coder')
 # ─── Model Routing Config (mutable at runtime) ───
 model_config = {
     "ollama_url": OLLAMA_URL,
-    "reasoning_model": LLAMA_MODEL,
-    "coding_model": os.environ.get('FEATHERLESS_MODEL', 'google/gemma-4-31B-it'),
-    "featherless_api_key": os.environ.get('FEATHERLESS_API_KEY'),
-    "featherless_base_url": os.environ.get('FEATHERLESS_BASE_URL', 'https://api.featherless.ai/v1'),
-    "featherless_model": os.environ.get('FEATHERLESS_MODEL', 'google/gemma-4-31B-it'),
+    "reasoning_model": os.environ.get('LLAMA_MODEL', 'meta-llama/Llama-3.3-70B-Instruct-Turbo'),
+    "coding_model": os.environ.get('QWEN_MODEL', 'Qwen/Qwen2.5-Coder-32B-Instruct'),
+    "aiml_api_key": os.environ.get('AIML_API_KEY'),
+    "aiml_base_url": os.environ.get('AIML_BASE_URL', 'https://api.aimlapi.com/v1'),
+    "aiml_model": os.environ.get('AIML_MODEL', 'moonshot/kimi-k2-7-code-highspeed'),
     "role_overrides": {},  # e.g. {"cfo": "mistral"} to override per-role
-    "mode": "auto",  # "auto" | "llama_only" | "qwen_only" | "featherless" | "simulation"
+    "mode": "aiml",  # "auto" | "llama_only" | "qwen_only" | "aiml" | "simulation"
 }
 
 # Cache for Ollama availability
 _ollama_cache = {"available": None, "checked_at": 0, "models": []}
+
+# ─── Cognee Knowledge Graph Config ───
+COGNEE_API_URL  = os.environ.get('COGNEE_API_URL',  'https://tenant-23a22d02-a9b6-467d-a3ba-3b9eca2af1be.aws.cognee.ai')
+COGNEE_API_KEY  = os.environ.get('COGNEE_API_KEY',  '3dd3f6ee0a713c1dcc2158b59ad33869dc23e2291b5dca364f6c679177bf114f')
+COGNEE_TENANT_ID = os.environ.get('COGNEE_TENANT_ID', '23a22d02-a9b6-467d-a3ba-3b9eca2af1be')
+COGNEE_DATASET  = os.environ.get('COGNEE_DATASET',  'rasalilabs')
+
+class CogneeService:
+    """Thin async client for the Cognee knowledge-graph API."""
+
+    @staticmethod
+    def _headers() -> dict:
+        return {
+            "X-Api-Key": COGNEE_API_KEY,
+            "X-Tenant-Id": COGNEE_TENANT_ID,
+            "Content-Type": "application/json",
+        }
+
+    @staticmethod
+    async def recall(query: str, top_k: int = 5, dataset: str = None) -> str:
+        """Search the knowledge graph and return a formatted context string."""
+        try:
+            payload = {
+                "query": query,
+                "search_type": "GRAPH_COMPLETION",
+                "datasets": [dataset or COGNEE_DATASET],
+                "top_k": top_k,
+                "only_context": False,
+                "include_references": False,
+            }
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                r = await c.post(
+                    f"{COGNEE_API_URL}/api/v1/recall",
+                    json=payload,
+                    headers=CogneeService._headers(),
+                )
+            if r.status_code == 200:
+                results = r.json()
+                # Extract text from result entries
+                fragments = []
+                for item in results:
+                    if isinstance(item, dict):
+                        text = (
+                            item.get("answer")
+                            or item.get("text")
+                            or item.get("content")
+                            or item.get("node_description")
+                            or ""
+                        )
+                        if text:
+                            fragments.append(str(text).strip())
+                if fragments:
+                    return "\n".join(fragments[:top_k])
+        except Exception as e:
+            logger.warning(f"Cognee recall failed: {e}")
+        return ""
+
+    @staticmethod
+    async def remember_text(text: str, dataset: str = None) -> bool:
+        """Ingest plain text into the Cognee knowledge graph."""
+        try:
+            payload = {
+                "text_data": [text],
+                "datasetName": dataset or COGNEE_DATASET,
+            }
+            async with httpx.AsyncClient(timeout=15.0) as c:
+                r = await c.post(
+                    f"{COGNEE_API_URL}/api/v1/add_text",
+                    json=payload,
+                    headers=CogneeService._headers(),
+                )
+            return r.status_code == 200
+        except Exception as e:
+            logger.warning(f"Cognee remember failed: {e}")
+        return False
+
+    @staticmethod
+    async def search(query: str, dataset: str = None, top_k: int = 10) -> list:
+        """Raw search — returns list of result dicts."""
+        try:
+            payload = {
+                "query": query,
+                "search_type": "GRAPH_COMPLETION",
+                "datasets": [dataset or COGNEE_DATASET],
+                "top_k": top_k,
+                "include_references": True,
+            }
+            async with httpx.AsyncClient(timeout=10.0) as c:
+                r = await c.post(
+                    f"{COGNEE_API_URL}/api/v1/search",
+                    json=payload,
+                    headers=CogneeService._headers(),
+                )
+            if r.status_code == 200:
+                return r.json()
+        except Exception as e:
+            logger.warning(f"Cognee search failed: {e}")
+        return []
 
 # ─── Lifespan Management ───
 from contextlib import asynccontextmanager
@@ -249,6 +364,8 @@ if not origins:
     origins = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:4001",
+        "http://127.0.0.1:4001",
         "http://localhost:12000",
         "http://127.0.0.1:12000",
         "http://localhost:12001",
@@ -761,7 +878,7 @@ USER_CHAT_RESPONSES = {
 }
 
 async def get_agent_response(role: str, context: str, task_type: str = "default") -> dict:
-    """Get response from Ollama or simulation.
+    """Get response from AI/ML API (with Ollama as local-first option).
     Returns {"content": str, "model": str, "routing": str, "mode": str}"""
     mode = model_config.get("mode", "auto")
     model_name, routing_reason = resolve_model_for(role, task_type)
@@ -771,54 +888,61 @@ async def get_agent_response(role: str, context: str, task_type: str = "default"
         text = _get_simulation_text(role, task_type)
         return {"content": text, "model": "simulation", "routing": routing_reason, "mode": "simulation"}
 
+    agent = AGENTS.get(role, AGENTS["developer"])
+    system_prompt = (
+        f"You are {agent['name']}, the {agent['title']} of an AI company. "
+        f"{agent['description']} Respond concisely and in-character. "
+        f"Keep responses under 3 sentences."
+    )
+    
+    # ─── Enrich with Cognee memory ───
+    cognee_context = ""
+    try:
+        cognee_context = await CogneeService.recall(context, top_k=5)
+    except Exception:
+        pass
+
+    enriched_context = context
+    if cognee_context:
+        enriched_context = f"{context}\n\n[Knowledge Graph Memory]:\n{cognee_context}"
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": enriched_context},
+    ]
+
+    aiml_available = bool(model_config.get("aiml_api_key"))
+
+    # Local Ollama path (only when explicitly preferred and available)
     ollama_available = await check_ollama_available()
-    featherless_available = bool(model_config.get("featherless_api_key"))
+    prefer_ollama = mode not in ("aiml",) and ollama_available
 
-    # Determine if we should use Featherless for this specific call
-    is_featherless_model = model_name == model_config["featherless_model"] or model_name.startswith("google/")
-    use_featherless = (mode == "featherless") or (is_featherless_model and featherless_available) or (not ollama_available and featherless_available)
-
-    if ollama_available and not use_featherless:
+    if prefer_ollama:
         try:
-            agent = AGENTS.get(role, AGENTS["developer"])
-            system_prompt = (
-                f"You are {agent['name']}, the {agent['title']} of an AI company. "
-                f"{agent['description']} Respond concisely and in-character. "
-                f"Keep responses under 3 sentences."
-            )
-
             async with httpx.AsyncClient(timeout=60.0) as c:
                 r = await c.post(f"{model_config['ollama_url']}/api/generate", json={
                     "model": model_name,
-                    "prompt": f"{system_prompt}\n\nContext: {context}\n\nRespond:",
+                    "prompt": f"{system_prompt}\n\nContext: {enriched_context}\n\nRespond:",
                     "stream": False
                 })
                 if r.status_code == 200:
                     text = r.json().get("response", "").strip()
                     if text:
-                        return {"content": text, "model": model_name, "routing": routing_reason, "mode": "live"}
+                        # Auto-persist conversation details into Cognee Graph Memory
+                        asyncio.create_task(CogneeService.remember_text(f"Agent {agent['name']} ({role}) responded to context '{context[:100]}...': {text}"))
+                        return {"content": text, "model": model_name, "routing": routing_reason, "mode": "live:ollama"}
         except Exception as e:
             logger.warning(f"Ollama call failed for {role} using {model_name}: {e}")
 
-    # Featherless route
-    if use_featherless:
+    # AI/ML API path — works for ALL models (Kimi, Llama, Qwen, etc.)
+    if aiml_available:
         try:
-            llm = ChatOpenAI(
-                api_key=model_config["featherless_api_key"],
-                model=model_config["featherless_model"],
-                base_url=model_config["featherless_base_url"],
-                max_tokens=512
-            )
-            agent = AGENTS.get(role, AGENTS["developer"])
-            system_prompt = (
-                f"You are {agent['name']}, the {agent['title']} of an AI company. "
-                f"{agent['description']} Respond concisely and in-character. "
-                f"Keep responses under 3 sentences."
-            )
-            response = await asyncio.to_thread(llm.invoke, f"{system_prompt}\n\nContext: {context}")
-            return {"content": response.content, "model": model_config["featherless_model"], "routing": f"featherless:{routing_reason}", "mode": "live"}
+            text = await asyncio.to_thread(_aiml_chat, messages, 512, model_name)
+            # Auto-persist conversation details into Cognee Graph Memory
+            asyncio.create_task(CogneeService.remember_text(f"Agent {agent['name']} ({role}) responded to context '{context[:100]}...': {text}"))
+            return {"content": text, "model": model_name, "routing": f"aiml:{routing_reason}", "mode": "live:aiml"}
         except Exception as e:
-            logger.warning(f"Featherless call failed for {role}: {e}")
+            logger.warning(f"AI/ML API call failed for {role} using {model_name}: {e}")
 
     # Fallback to simulation
     text = _get_simulation_text(role, task_type)
@@ -1137,19 +1261,17 @@ async def generate_artifacts(project_id: str, goal: str, output_format: str):
     OUTPUT ONLY THE RAW CONTENT WITH [FILE: ...] TAGS.
     """
     
-    # Use Featherless for synthesis
+    # Use AI/ML API for synthesis
     html_content = ""
     backend_code = ""
     try:
         logger.info(f"Synthesizing artifacts for project {project_id}...")
-        llm = ChatOpenAI(
-            api_key=model_config["featherless_api_key"],
-            model=model_config["featherless_model"],
-            base_url=model_config["featherless_base_url"],
-            max_tokens=4000
-        )
-        response = await asyncio.to_thread(llm.invoke, prompt)
-        raw_synthesis = response.content.strip()
+        messages = [
+            {"role": "system", "content": "You are an expert full-stack software engineer and technical writer."},
+            {"role": "user", "content": prompt},
+        ]
+        raw_synthesis = await asyncio.to_thread(_aiml_chat, messages, 4000)
+        raw_synthesis = raw_synthesis.strip()
         generated_files = parse_multi_file_content(raw_synthesis)
         
         # We'll use the first HTML file as the primary one for PNG/PDF if needed
@@ -1183,8 +1305,12 @@ async def generate_artifacts(project_id: str, goal: str, output_format: str):
         
         Output ONLY the raw code, no markdown wrappers.
         """
-        backend_response = await asyncio.to_thread(llm.invoke, backend_prompt)
-        backend_code = backend_response.content.strip()
+        backend_messages = [
+            {"role": "system", "content": "You are an expert backend engineer writing FastAPI applications."},
+            {"role": "user", "content": backend_prompt},
+        ]
+        backend_code = await asyncio.to_thread(_aiml_chat, backend_messages, 4000)
+        backend_code = backend_code.strip()
         if backend_code.startswith("```python"):
             backend_code = backend_code[9:]
         elif backend_code.startswith("```"):
@@ -1897,27 +2023,25 @@ async def pull_model(req: ModelPullRequest):
 async def test_model(model_name: str):
     """Quick test a specific model with a simple prompt."""
     ollama_ok = await check_ollama_available()
-    featherless_available = bool(model_config.get("featherless_api_key"))
+    aiml_available = bool(model_config.get("aiml_api_key"))
     
-    is_featherless = model_name.startswith("google/") or model_name == model_config.get("featherless_model")
+    is_aiml = model_name == model_config.get("aiml_model") or aiml_available
     
-    if is_featherless and featherless_available:
+    if is_aiml and aiml_available:
         try:
-            llm = ChatOpenAI(
-                api_key=model_config["featherless_api_key"],
-                model=model_name,
-                base_url=model_config["featherless_base_url"],
-                max_tokens=50
+            messages = [{"role": "user", "content": "Say hello in one sentence."}]
+            client = OpenAI(base_url=model_config["aiml_base_url"], api_key=model_config["aiml_api_key"])
+            resp = await asyncio.to_thread(
+                lambda: client.chat.completions.create(model=model_name, messages=messages, max_tokens=50)
             )
-            response = await asyncio.to_thread(llm.invoke, "Say hello in one sentence.")
             return {
                 "status": "ok",
-                "response": response.content.strip(),
+                "response": resp.choices[0].message.content.strip(),
                 "model": model_name,
-                "engine": "Featherless AI"
+                "engine": "AI/ML API"
             }
         except Exception as e:
-            return {"status": "error", "detail": f"Featherless test failed: {str(e)}"}
+            return {"status": "error", "detail": f"AI/ML API test failed: {str(e)}"}
 
     if not ollama_ok:
         return {"status": "error", "detail": "Ollama not available", "mode": "simulation"}
@@ -2185,34 +2309,41 @@ async def download_artifact(artifact_id: str):
         mt = media_types.get(artifact.get("artifact_type"), "application/octet-stream")
         return FileResponse(artifact["file_path"], media_type=mt, filename=artifact["name"])
 
-# ─── Generative Assets (Featherless AI) ───
+# ─── Generative Assets (AI/ML API) ───
 
 async def generate_image_asset(prompt: str, project_id: str) -> Optional[Dict]:
-    """Generate a high-quality image asset using Featherless AI intelligence."""
+    """Generate a high-quality image asset using AI/ML API."""
     now = datetime.now(timezone.utc).isoformat()
     try:
-        # Phase 1: Use Featherless LLM to expand the prompt for visual excellence
-        llm = ChatOpenAI(
-            api_key=model_config["featherless_api_key"],
-            model=model_config["featherless_model"],
-            base_url=model_config["featherless_base_url"],
-            max_tokens=256
-        )
+        # Phase 1: Use AI/ML API to expand the prompt for visual excellence
         expansion_prompt = f"Create a detailed, high-quality, professional artistic prompt for an AI image generator based on this goal: '{prompt}'. Focus on lighting, texture, and professional aesthetics. Return ONLY the expanded prompt."
-        expanded_prompt = await asyncio.to_thread(llm.invoke, expansion_prompt)
+        messages = [{"role": "user", "content": expansion_prompt}]
+        expanded_text = await asyncio.to_thread(_aiml_chat, messages, 256)
         
-        # Phase 2: In a real scenario, we would hit a generative endpoint. 
-        # For now, we simulate the creation of a stunning placeholder image or use the prompt to drive a fallback.
-        # Given the instruction "connect this api for image and video creation", we will attempt a generative call if supported.
+        logger.info(f"Generating image with expanded prompt: {expanded_text[:100]}...")
         
-        logger.info(f"Generating image with expanded prompt: {expanded_prompt.content[:100]}...")
+        # Call AI/ML API Image Generation
+        url = "https://api.aimlapi.com/v1/images/generations"
+        payload = {
+            "prompt": expanded_text,
+            "model": "stabilityai/stable-diffusion-3-5-large",
+            "n": 1,
+            "size": "1024x1024"
+        }
+        headers = {
+            "Authorization": f"Bearer {model_config['aiml_api_key']}", 
+            "Content-Type": "application/json"
+        }
+        async with httpx.AsyncClient(timeout=40.0) as client:
+            r = await client.post(url, json=payload, headers=headers)
         
-        # Placeholder/Simulation for the actual generative pixel data
-        # In a production environment with a true generative endpoint, we'd use:
-        # client = OpenAI(api_key=..., base_url=...)
-        # response = client.images.generate(model="...", prompt=expanded_prompt.content, ...)
+        gen_data = r.json()
+        logger.info(f"Image Generation Result: {gen_data}")
         
-        # For demonstration, we create a specialized 'generative_metadata' artifact
+        image_url = None
+        if "data" in gen_data and isinstance(gen_data["data"], list) and len(gen_data["data"]) > 0:
+            image_url = gen_data["data"][0].get("url")
+            
         return {
             "id": str(uuid.uuid4()),
             "project_id": project_id,
@@ -2220,10 +2351,11 @@ async def generate_image_asset(prompt: str, project_id: str) -> Optional[Dict]:
             "name": "generative_image.json",
             "artifact_type": "image_spec",
             "content": json.dumps({
-                "prompt": expanded_prompt.content,
-                "engine": "Featherless AI",
-                "model": model_config["featherless_model"],
-                "status": "ready_for_render"
+                "prompt": expanded_text,
+                "url": image_url or "https://upload.wikimedia.org/wikipedia/commons/3/35/Maldivesfish2.jpg",
+                "engine": "AI/ML API Image (stabilityai/stable-diffusion-3-5-large)",
+                "status": "ready" if image_url else "failed",
+                "raw_response": gen_data
             }),
             "file_path": None,
             "created_at": now
@@ -2233,20 +2365,30 @@ async def generate_image_asset(prompt: str, project_id: str) -> Optional[Dict]:
         return None
 
 async def generate_video_asset(prompt: str, project_id: str) -> Optional[Dict]:
-    """Generate a cinematic video asset spec using Featherless AI intelligence."""
+    """Generate a cinematic video asset spec using AI/ML API."""
     now = datetime.now(timezone.utc).isoformat()
     try:
-        llm = ChatOpenAI(
-            api_key=model_config["featherless_api_key"],
-            model=model_config["featherless_model"],
-            base_url=model_config["featherless_base_url"],
-            max_tokens=256
-        )
-        expansion_prompt = f"Create a detailed, cinematic storyboard and motion prompt for an AI video generator based on: '{prompt}'. Describe camera movement, mood, and visual progression. Return ONLY the technical prompt."
-        expanded_prompt = await asyncio.to_thread(llm.invoke, expansion_prompt)
+        logger.info(f"Generating video with text-to-video model alibaba/wan-2-6-t2v: {prompt[:100]}...")
         
-        logger.info(f"Generating video spec: {expanded_prompt.content[:100]}...")
+        url = "https://api.aimlapi.com/v2/video/generations"
+        payload = {
+            "model": "alibaba/wan-2-6-t2v",
+            "prompt": prompt,
+        }
+        headers = {
+            "Authorization": f"Bearer {model_config['aiml_api_key']}", 
+            "Content-Type": "application/json"
+        }
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(url, json=payload, headers=headers)
         
+        gen_data = r.json()
+        logger.info(f"Video Generation Result: {gen_data}")
+        
+        video_url = gen_data.get("url") or gen_data.get("video_url")
+        if not video_url and "data" in gen_data and isinstance(gen_data["data"], list) and len(gen_data["data"]) > 0:
+            video_url = gen_data["data"][0].get("url")
+
         return {
             "id": str(uuid.uuid4()),
             "project_id": project_id,
@@ -2254,11 +2396,11 @@ async def generate_video_asset(prompt: str, project_id: str) -> Optional[Dict]:
             "name": "generative_video.json",
             "artifact_type": "video_spec",
             "content": json.dumps({
-                "storyboard": expanded_prompt.content,
-                "engine": "Featherless AI",
-                "model": model_config["featherless_model"],
-                "duration": "5s",
-                "status": "ready_for_render"
+                "prompt": prompt,
+                "url": video_url or "https://api.aimlapi.com/v2/video/generations",
+                "engine": "AI/ML API Video (alibaba/wan-2-6-t2v)",
+                "status": "ready" if video_url else "failed",
+                "raw_response": gen_data
             }),
             "file_path": None,
             "created_at": now
@@ -2269,7 +2411,7 @@ async def generate_video_asset(prompt: str, project_id: str) -> Optional[Dict]:
 
 @api_router.post("/artifacts/generate-generative")
 async def create_generative_artifact(request: Dict[str, Any]):
-    """Endpoint to manually trigger Featherless generative asset creation."""
+    """Endpoint to manually trigger AI/ML API generative asset creation."""
     project_id = request.get("project_id")
     prompt = request.get("prompt")
     asset_type = request.get("type", "image") # "image" or "video"
@@ -2288,8 +2430,6 @@ async def create_generative_artifact(request: Dict[str, Any]):
     await db.artifacts.insert_one(artifact)
     return {k: v for k, v in artifact.items() if k != "_id"}
 
-app.include_router(api_router)
-
 # ─── WebSocket (mounted directly on app, not router) ───
 @app.websocket("/api/ws/{project_id}")
 async def websocket_endpoint(websocket: WebSocket, project_id: str):
@@ -2300,6 +2440,120 @@ async def websocket_endpoint(websocket: WebSocket, project_id: str):
             # Keep connection alive, handle incoming WS messages if needed
     except WebSocketDisconnect:
         ws_manager.disconnect(websocket, project_id)
+
+# ─── Cognee Knowledge Graph Endpoints ───
+
+class CogneeRecallRequest(BaseModel):
+    query: str
+    top_k: int = 10
+    dataset: Optional[str] = None
+
+class CogneeRememberRequest(BaseModel):
+    text: str
+    dataset: Optional[str] = None
+
+@api_router.post("/cognee/recall")
+async def cognee_recall(req: CogneeRecallRequest):
+    """Recall context from the Cognee knowledge graph."""
+    results = await CogneeService.search(req.query, dataset=req.dataset, top_k=req.top_k)
+    return {"query": req.query, "results": results, "count": len(results)}
+
+@api_router.post("/cognee/remember")
+async def cognee_remember(req: CogneeRememberRequest):
+    """Ingest text into the Cognee knowledge graph."""
+    ok = await CogneeService.remember_text(req.text, dataset=req.dataset)
+    return {"status": "stored" if ok else "failed", "dataset": req.dataset or COGNEE_DATASET}
+
+@api_router.get("/cognee/status")
+async def cognee_status():
+    """Check Cognee connectivity and return tenant info."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.get(
+                f"{COGNEE_API_URL}/api/v1/datasets/",
+                headers={
+                    "X-Api-Key": COGNEE_API_KEY,
+                    "X-Tenant-Id": COGNEE_TENANT_ID,
+                },
+            )
+        if r.status_code == 200:
+            datasets = r.json()
+            return {
+                "status": "connected",
+                "tenant_id": COGNEE_TENANT_ID,
+                "url": COGNEE_API_URL,
+                "datasets": datasets,
+            }
+        return {"status": "error", "code": r.status_code, "detail": r.text}
+    except Exception as e:
+        return {"status": "unreachable", "detail": str(e)}
+
+@api_router.get("/cognee/datasets")
+async def cognee_datasets():
+    """List all Cognee datasets for this tenant."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as c:
+            r = await c.get(
+                f"{COGNEE_API_URL}/api/v1/datasets/",
+                headers={
+                    "X-Api-Key": COGNEE_API_KEY,
+                    "X-Tenant-Id": COGNEE_TENANT_ID,
+                },
+            )
+        return r.json() if r.status_code == 200 else []
+    except Exception:
+        return []
+
+class CogneeForgetRequest(BaseModel):
+    dataset: Optional[str] = None
+    everything: bool = False
+    memory_only: bool = False
+
+@api_router.post("/cognee/forget")
+async def cognee_forget(req: CogneeForgetRequest):
+    """Prune or delete data/datasets from Cognee."""
+    try:
+        payload = {
+            "dataset": req.dataset or COGNEE_DATASET,
+            "everything": req.everything,
+            "memoryOnly": req.memory_only
+        }
+        if req.everything:
+            payload.pop("dataset", None)
+            
+        async with httpx.AsyncClient(timeout=30.0) as c:
+            r = await c.post(
+                f"{COGNEE_API_URL}/api/v1/forget",
+                json=payload,
+                headers=CogneeService._headers()
+            )
+        if r.status_code == 200:
+            return {"status": "success", "detail": "Memory successfully pruned"}
+        return {"status": "error", "code": r.status_code, "detail": r.text}
+    except Exception as e:
+        return {"status": "failed", "detail": str(e)}
+
+@api_router.post("/cognee/improve")
+async def cognee_improve(request: Dict[str, Any]):
+    """Run post-ingestion graph mapping/enrichment (cognify)."""
+    dataset = request.get("dataset", COGNEE_DATASET)
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as c:
+            r = await c.post(
+                f"{COGNEE_API_URL}/api/v1/cognify",
+                json={
+                    "datasets": [dataset],
+                    "run_in_background": False
+                },
+                headers=CogneeService._headers()
+            )
+        if r.status_code == 200:
+            return {"status": "success", "detail": r.json()}
+        return {"status": "error", "code": r.status_code, "detail": r.text}
+    except Exception as e:
+        return {"status": "failed", "detail": str(e)}
+
+app.include_router(api_router)
 
 # CORS is handled at the top of the file to ensure it captures all requests.
 
