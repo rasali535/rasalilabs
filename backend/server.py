@@ -806,16 +806,16 @@ def resolve_model_for(role: str, task_type: str) -> tuple:
     if mode == "featherless":
         return model_config["featherless_model"], "featherless_mode"
 
-    # Auto mode: route by role and task
+    # Auto / AI/ML Mix mode: route by role and task
     coding_roles = {"developer", "frontend", "backend"}
     coding_tasks = {"code", "implementation", "debug", "test"}
 
     if role in coding_roles and task_type in coding_tasks:
-        return model_config["coding_model"], f"auto:coding({role}/{task_type})"
+        return model_config["coding_model"], f"{mode}:coding({role}/{task_type})"
     if task_type in coding_tasks:
-        return model_config["coding_model"], f"auto:coding_task({task_type})"
+        return model_config["coding_model"], f"{mode}:coding_task({task_type})"
 
-    return model_config["reasoning_model"], f"auto:reasoning({role}/{task_type})"
+    return model_config["reasoning_model"], f"{mode}:reasoning({role}/{task_type})"
 
 SIMULATION_RESPONSES = {
     "ceo": {

@@ -20,10 +20,11 @@ import AgentAvatar from "@/components/AgentAvatar";
 import { AGENT_META } from "@/lib/api";
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || window.location.origin.replace(":3000", ":4001");
 
 const MODE_LABELS = {
-  auto: { label: "Auto", desc: "Routes to Llama (reasoning) or Qwen (coding) based on task type" },
+  aiml: { label: "AI/ML Mix", desc: "Routes coding tasks to Qwen and reasoning to GPT-4o-Mini via AI/ML API" },
+  auto: { label: "Local Auto", desc: "Routes to local Llama (reasoning) or Qwen (coding) when Ollama is active" },
   llama_only: { label: "Llama Only", desc: "All agents use the reasoning model for everything" },
   qwen_only: { label: "Qwen Only", desc: "All agents use the coding model for everything" },
   simulation: { label: "Simulation", desc: "No LLM calls. Uses predefined responses for all agents" },
