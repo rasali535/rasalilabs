@@ -39,7 +39,7 @@ def _aiml_chat(messages: list, max_tokens: int = 512, model: str = None) -> str:
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
+mongo_url = os.environ.get('MONGODB_URI') or os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
 client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=2000, connectTimeoutMS=2000)
 _real_db = client[os.environ.get('DB_NAME', 'rasalilabs')]
 
