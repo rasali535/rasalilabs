@@ -150,7 +150,7 @@ export default function Models() {
             Refresh
           </button>
           <button
-            onClick={handleSave}
+            onClick={() => handleSaveMode(mode)}
             disabled={saving}
             className="btn-primary px-4 py-1.5 text-xs flex items-center gap-1.5"
             data-testid="save-config-btn"
