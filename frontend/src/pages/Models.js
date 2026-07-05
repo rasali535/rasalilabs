@@ -48,7 +48,6 @@ export default function Models() {
         setData(res.data);
         setMode(res.data.config.mode);
         setRoleOverrides(res.data.config.role_overrides || {});
-        setOllamaAvailable(res.data.ollama_available);
       }
     } catch (e) {
       console.error(e);
