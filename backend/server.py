@@ -228,11 +228,11 @@ QWEN_MODEL = os.environ.get('QWEN_MODEL', 'qwen2.5-coder')
 # ─── Model Routing Config (mutable at runtime) ───
 model_config = {
     "ollama_url": OLLAMA_URL,
-    "reasoning_model": os.environ.get('LLAMA_MODEL', 'meta-llama/Llama-3.3-70B-Instruct-Turbo'),
-    "coding_model": os.environ.get('QWEN_MODEL', 'Qwen/Qwen2.5-Coder-32B-Instruct'),
+    "reasoning_model": os.environ.get('REASONING_MODEL', 'anthropic/claude-3-5-sonnet-20241022'),
+    "coding_model": os.environ.get('CODING_MODEL', 'anthropic/claude-3-5-sonnet-20241022'),
     "aiml_api_key": os.environ.get('AIML_API_KEY'),
     "aiml_base_url": os.environ.get('AIML_BASE_URL', 'https://api.aimlapi.com/v1'),
-    "aiml_model": os.environ.get('AIML_MODEL', 'moonshot/kimi-k2-7-code-highspeed'),
+    "aiml_model": os.environ.get('AIML_MODEL', 'anthropic/claude-3-5-sonnet-20241022'),
     "role_overrides": {},  # e.g. {"cfo": "mistral"} to override per-role
     "mode": "aiml",  # "auto" | "llama_only" | "qwen_only" | "aiml" | "simulation"
 }
@@ -898,7 +898,7 @@ async def get_agent_response(role: str, context: str, task_type: str = "default"
     # ─── Enrich with Cognee memory ───
     cognee_context = ""
     try:
-        cognee_context = await CogneeService.recall(context, top_k=5)
+        cognee_context = await CogneeService.recall(context, top_k=10)
     except Exception:
         pass
 

@@ -17,10 +17,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AgentAvatar from "@/components/AgentAvatar";
-import { AGENT_META } from "@/lib/api";
-import axios from "axios";
+import api, { AGENT_META } from "@/lib/api";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || window.location.origin.replace(":3000", ":4001");
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || (window.location.origin.includes("vercel.app") ? "https://rasalilabs.vercel.app" : window.location.origin.replace(":3000", ":4001"));
 
 const MODE_LABELS = {
   aiml: { label: "AI/ML Mix", desc: "Routes coding tasks to Qwen and reasoning to GPT-4o-Mini via AI/ML API" },
@@ -48,15 +47,18 @@ export default function Models() {
 
   const loadModels = useCallback(async () => {
     try {
-      const res = await axios.get(`${BACKEND_URL}/api/models`);
-      setData(res.data);
-      setMode(res.data.config.mode);
-      setReasoningModel(res.data.config.reasoning_model);
-      setCodingModel(res.data.config.coding_model);
-      setOllamaUrl(res.data.config.ollama_url);
-      setRoleOverrides(res.data.config.role_overrides || {});
+      const res = await api.get("/models");
+      if (res && res.data) {
+        setData(res.data);
+        setMode(res.data.config.mode);
+        setRoleOverrides(res.data.config.role_overrides || {});
+        setOllamaAvailable(res.data.ollama_available);
+      }
     } catch (e) {
       console.error(e);
+      // Mode defaults if API fails
+      setMode("aiml");
+      toast.error(e.message || "Failed to load configuration");
     } finally {
       setLoading(false);
     }
@@ -66,43 +68,47 @@ export default function Models() {
     loadModels();
   }, [loadModels]);
 
-  const handleSave = async () => {
-    setSaving(true);
+  const handleSaveMode = async (newMode) => {
     try {
-      await axios.post(`${BACKEND_URL}/api/models/config`, {
-        mode,
-        reasoning_model: reasoningModel,
-        coding_model: codingModel,
-        ollama_url: ollamaUrl,
+      await api.post("/models/config", {
+        mode: newMode,
         role_overrides: roleOverrides,
       });
-      toast.success("Model config saved!");
+      setMode(newMode);
+      toast.success("Configuration updated successfully");
       loadModels();
     } catch (e) {
-      toast.error("Failed to save config");
-    } finally {
-      setSaving(false);
+      toast.error(e.message || "Failed to update configuration");
     }
+  };
+
+  const handleRoleOverrideChange = (role, newModel) => {
+    setRoleOverrides((prev) => ({ ...prev, [role]: newModel }));
   };
 
   const handleTest = async (modelName) => {
     setTesting(modelName);
     setTestResult(null);
     try {
-      const res = await axios.get(`${BACKEND_URL}/api/models/test/${encodeURIComponent(modelName)}`);
+      const res = await api.get(`/models/test/${encodeURIComponent(modelName)}`);
       setTestResult(res.data);
+      if (res.data.status === "ok") {
+        toast.success(`${modelName} responded successfully`);
+      } else {
+        toast.error(`Test failed for ${modelName}`);
+      }
     } catch (e) {
-      setTestResult({ status: "error", detail: "Request failed" });
+      toast.error(e.message || "Failed to test model");
     } finally {
       setTesting(null);
     }
   };
 
-  const handlePull = async () => {
+  const handlePullModel = async () => {
     if (!pullModel.trim()) return;
     setPulling(true);
     try {
-      const res = await axios.post(`${BACKEND_URL}/api/models/pull`, { model_name: pullModel.trim() });
+      const res = await api.post("/models/pull", { model_name: pullModel.trim() });
       toast.success(`Pull started for ${pullModel}`);
       setPullModel("");
       setTimeout(loadModels, 3000);
