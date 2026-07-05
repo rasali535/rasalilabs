@@ -12,10 +12,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import AgentAvatar from "@/components/AgentAvatar";
-import { AGENT_META } from "@/lib/api";
+import { AGENT_META, BACKEND_URL } from "@/lib/api";
 import axios from "axios";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
 const DEPT_COLORS = {
   executive: "#FFFFFF",

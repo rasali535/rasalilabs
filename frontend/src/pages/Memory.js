@@ -16,9 +16,7 @@ import {
 } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import axios from "axios";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || window.location.origin.replace(":3000", ":4001");
-
+import { BACKEND_URL } from "@/lib/api";
 export default function Memory() {
   const [status, setStatus] = useState(null);
   const [datasets, setDatasets] = useState([]);

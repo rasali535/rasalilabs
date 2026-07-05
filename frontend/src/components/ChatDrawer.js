@@ -1,11 +1,9 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { MessageCircle, X, Send, ChevronDown } from "lucide-react";
-import { AGENT_META } from "@/lib/api";
+import { AGENT_META, BACKEND_URL } from "@/lib/api";
 import AgentAvatar from "@/components/AgentAvatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import axios from "axios";
-
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
 export default function ChatDrawer() {
   const [open, setOpen] = useState(false);
