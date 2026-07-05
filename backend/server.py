@@ -2430,8 +2430,8 @@ async def create_generative_artifact(request: Dict[str, Any]):
     await db.artifacts.insert_one(artifact)
     return {k: v for k, v in artifact.items() if k != "_id"}
 
-# ─── WebSocket (mounted directly on app, not router) ───
-@app.websocket("/api/ws/{project_id}")
+# ─── WebSocket (mounted on api_router) ───
+@api_router.websocket("/ws/{project_id}")
 async def websocket_endpoint(websocket: WebSocket, project_id: str):
     await ws_manager.connect(websocket, project_id)
     try:
