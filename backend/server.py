@@ -222,8 +222,7 @@ class DBProxy:
 db = DBProxy(_real_db)
 
 OLLAMA_URL = os.environ.get('OLLAMA_URL', 'http://localhost:11434')
-LLAMA_MODEL = os.environ.get('LLAMA_MODEL', 'llama3.2')
-QWEN_MODEL = os.environ.get('QWEN_MODEL', 'qwen2.5-coder')
+
 
 # ─── Model Routing Config (mutable at runtime) ───
 model_config = {
