@@ -1,6 +1,6 @@
 import axios from "axios";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || (window.location.origin.includes("vercel.app") ? "https://rasalilabs.vercel.app" : window.location.origin.replace(":3000", ":4001"));
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || (window.location.origin.includes("vercel.app") ? "https://rasalilabs.onrender.com" : window.location.origin.replace(":3000", ":4001"));
 const API = `${BACKEND_URL}/api`;
 
 const api = axios.create({ baseURL: API });
