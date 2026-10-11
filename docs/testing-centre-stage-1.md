@@ -75,8 +75,13 @@ engine and eight agents are intentionally unchanged.
 
     python -m pip install fastapi==0.110.1 starlette==0.37.2 httpx==0.28.1 pydantic==2.12.5 pytest==9.0.3
     python -m pytest -q tests/test_testing_centre.py
-    cd frontend && npm ci --legacy-peer-deps && CI=false npm run build
+    cd frontend && npm install --legacy-peer-deps --no-audit --no-fund && CI=false npm run build
 
 The focused tests use stubbed HTTP/DNS and a fake database; real authorized
 website checks still need manual staging validation. This PR must not be
 merged until reviewed and approved.
+
+Known baseline issue: both dependency lockfiles disagree with the existing
+date-fns version constraint. The Stage 1 CI installs the declared
+package.json dependency tree without a frozen lockfile. Align and commit a
+reproducible lockfile in a dedicated maintenance change before production.
