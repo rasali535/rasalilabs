@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.testing_centre.browser import clean_diagnostic, interpret_dom, resolve_public_ipv4
+from backend.testing_centre.browser import clean_diagnostic, interpret_dom, interpret_link_checks, resolve_public_ipv4
 from tests.test_testing_centre import FakeDB, MockCollection, TOKEN, client_for, setup_config
 
 
@@ -46,6 +46,18 @@ def test_dom_finding_classification_and_url_redaction():
     assert "Slow navigation timing" in names
     assert all(finding["verified_by"] == "browser_observation" for finding in report)
     assert "secret" not in clean_diagnostic("Request https://example.com/?token=secret failed")
+
+
+def test_link_head_checks_only_flag_confirmed_missing_destinations():
+    items = interpret_link_checks([
+        {"path": "/missing", "status": 404},
+        {"path": "/gone", "status": 410},
+        {"path": "/head-unsupported", "status": 405},
+        {"path": "/healthy", "status": 200},
+    ])
+    assert len(items) == 2
+    assert all(item["title"] == "Broken same-origin link" for item in items)
+    assert all(item["verified_by"] == "browser_observation" for item in items)
 
 
 def test_browser_disabled_without_isolation_config(monkeypatch):
