@@ -1476,7 +1476,7 @@ async def render_html_to_png(html_content: str, project_id: str) -> str:
             page = await browser.new_page(viewport={"width": 1280, "height": 720})
             
             # Go to the file instead of set_content to allow relative paths
-            await page.goto(f"file:///{str(temp_html).replace('\\', '/')}")
+            await page.goto(temp_html.resolve().as_uri())
             
             # Wait for content to load and potential animations to settle
             await page.wait_for_load_state("networkidle")
