@@ -2553,6 +2553,14 @@ async def cognee_improve(request: Dict[str, Any]):
     except Exception as e:
         return {"status": "failed", "detail": str(e)}
 
+# Stage 1 Testing Centre: opt-in only; kept separate from the agent engine.
+if __package__:
+    from .testing_centre.router import create_testing_router
+else:
+    from testing_centre.router import create_testing_router
+
+app.include_router(create_testing_router(db), prefix="/api")
+
 app.include_router(api_router)
 
 # CORS is handled at the top of the file to ensure it captures all requests.
