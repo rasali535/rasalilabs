@@ -84,6 +84,8 @@ export const getTestingScans = (token) =>
   api.get("/testing/scans", testingHeaders(token)).then(r => Array.isArray(r.data) ? r.data : []);
 export const createTestingScan = (data, token) =>
   api.post("/testing/scans", data, testingHeaders(token)).then(r => r.data);
+export const getTestingEvidence = (id, token) =>
+  api.get(`/testing/evidence/${encodeURIComponent(id)}`, testingHeaders(token)).then(r => r.data);
 
 // ─── WebSocket ───
 export const getWsUrl = (projectId) => {
