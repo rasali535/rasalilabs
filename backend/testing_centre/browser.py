@@ -57,6 +57,47 @@ DOM_PROBE = r"""() => {
 }"""
 
 
+# Only a few read-only same-origin HEAD requests. Do not follow redirects,
+# execute clicks, or use GET fallbacks for unsupported HEAD responses.
+LINK_HEAD_PROBE = r"""async () => {
+  const origin = window.location.origin;
+  const paths = Array.from(document.querySelectorAll('a[href]')).map(node => {
+    try {
+      const link = new URL(node.getAttribute('href'), origin);
+      if (link.origin !== origin || link.search || link.hash ||
+          /(?:logout|signout|delete|remove|unsubscribe|purchase)/i.test(link.pathname)) {
+        return null;
+      }
+      return link.pathname;
+    } catch { return null; }
+  }).filter(Boolean);
+  const targets = Array.from(new Set(paths)).filter(path => path !== location.pathname).slice(0, 4);
+  const outcomes = await Promise.all(targets.map(async (path) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 2500);
+    try {
+      const response = await fetch(path, {
+        method: 'HEAD', redirect: 'manual', cache: 'no-store',
+        credentials: 'omit', signal: controller.signal
+      });
+      return { path: path.slice(0, 150), status: response.status };
+    } catch {
+      return { path: path.slice(0, 150), status: null };
+    } finally { clearTimeout(timer); }
+  }));
+  return outcomes;
+}"""
+
+
+def interpret_link_checks(rows: list[dict]) -> list[dict]:
+    return [
+        finding("navigation", "medium", "Broken same-origin link",
+            f"HEAD returned HTTP {row['status']} for {row['path']}",
+            "Verify whether the link destination exists and update the route.", "desktop")
+        for row in rows[:4] if row.get("status") in (404, 410)
+    ]
+
+
 def clean_diagnostic(text: str) -> str:
     """Redact URL query strings and truncate diagnostics; never record bodies."""
     text = str(text or "")
@@ -148,6 +189,7 @@ async def browser_audit(url: str, host: str, *, resolver=None, playwright_factor
             "JavaScript runtime errors and browser console errors",
             "Failed same-origin network requests",
             "Image and navigation element checks",
+            "Up to four same-origin links via non-following HEAD probes",
             "Responsive horizontal overflow",
             "Navigation and first-contentful-paint timing",
             "Desktop, tablet and mobile screenshots",
@@ -265,6 +307,15 @@ async def browser_audit(url: str, host: str, *, resolver=None, playwright_factor
                         probe = await page.evaluate(DOM_PROBE)
                         result["metrics"] = probe
                         issues.extend(interpret_dom(probe, viewport["name"]))
+                        if viewport["name"] == "desktop":
+                            try:
+                                links = await page.evaluate(LINK_HEAD_PROBE)
+                                result["links_checked"] = len(links)
+                                result["broken_links"] = sum(row.get("status") in (404, 410) for row in links)
+                                issues.extend(interpret_link_checks(links))
+                            except Exception:
+                                result["links_checked"] = 0
+                                result["broken_links"] = None
                         if result["http_status"] and result["http_status"] >= 400:
                             issues.append(finding("navigation", "high", "Page returned HTTP error",
                                 f"HTTP {result['http_status']}", "Review page routing and server logs.", viewport["name"]))
