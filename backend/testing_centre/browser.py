@@ -63,7 +63,7 @@ LINK_HEAD_PROBE = r"""async () => {
   const origin = window.location.origin;
   const paths = Array.from(document.querySelectorAll('a[href]')).map(node => {
     try {
-      const link = new URL(node.getAttribute('href'), origin);
+      const link = new URL(node.getAttribute('href'), document.baseURI);
       if (link.origin !== origin || link.search || link.hash ||
           /(?:logout|signout|delete|remove|unsubscribe|purchase)/i.test(link.pathname)) {
         return null;
