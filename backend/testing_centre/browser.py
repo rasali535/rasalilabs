@@ -191,7 +191,8 @@ async def browser_audit(url: str, host: str, *, resolver=None, playwright_factor
                         try:
                             target = urlsplit(req.url)
                             permitted = (target.scheme == "https" and target.hostname == host
-                                         and target.port in (None, 443) and request_count <= MAX_REQUESTS)
+                                         and target.port in (None, 443) and req.method in ("GET", "HEAD")
+                                         and request_count <= MAX_REQUESTS)
                         except ValueError:
                             permitted = False
                         if not permitted:
@@ -294,6 +295,12 @@ async def browser_audit(url: str, host: str, *, resolver=None, playwright_factor
             finally:
                 await browser.close()
 
+    if report["third_party_requests_blocked"]:
+        report["findings"].append(finding(
+            "coverage", "low", "Network requests blocked by scan policy",
+            f"{report['third_party_requests_blocked']} request(s) were blocked, including third-party resources, unsafe methods or request-limit excess.",
+            "Review restricted resources in a properly isolated and explicitly authorized scan environment.",
+        ))
     report["findings"] = report["findings"][:MAX_FINDINGS]
     report["elapsed_ms"] = round((time.monotonic() - start) * 1000)
     report["completed_at"] = datetime.now(timezone.utc).isoformat()
