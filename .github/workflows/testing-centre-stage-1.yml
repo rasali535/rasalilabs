@@ -1,4 +1,4 @@
-name: Testing Centre Stage 1
+name: Testing Centre Stages 1 and 2
 
 on:
   pull_request:
@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   backend:
-    name: Stage 1 Python tests
+    name: Stage 1 and 2 Python tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,12 +19,17 @@ jobs:
           python-version: "3.11"
           cache: pip
           cache-dependency-path: backend/requirements.txt
-      - name: Install focused Stage 1 test dependencies
-        run: python -m pip install "fastapi==0.110.1" "starlette==0.37.2" "httpx==0.28.1" "pydantic==2.12.5" "pytest==9.0.3"
+      - name: Install Stage 1 and 2 test dependencies
+        run: python -m pip install "fastapi==0.110.1" "starlette==0.37.2" "httpx==0.28.1" "pydantic==2.12.5" "pytest==9.0.3" "playwright==1.58.0"
       - name: Python syntax checks
-        run: python -m compileall -q backend/testing_centre backend/server.py tests/test_testing_centre.py
+        run: python -m compileall -q backend/testing_centre backend/server.py tests/test_testing_centre.py tests/test_testing_centre_browser.py tests/test_testing_centre_playwright_smoke.py
       - name: Run Testing Centre regression tests (mocked network)
-        run: python -m pytest -q tests/test_testing_centre.py
+        run: python -m pytest -q tests/test_testing_centre.py tests/test_testing_centre_browser.py
+
+      - name: Install Chromium for offline browser smoke
+        run: python -m playwright install --with-deps chromium
+      - name: Run offline real Chromium smoke test
+        run: python -m pytest -q tests/test_testing_centre_playwright_smoke.py
 
   frontend:
     name: React production build
