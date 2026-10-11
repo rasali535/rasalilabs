@@ -11,7 +11,8 @@ import {
   Zap,
   MessageCircle,
   Mail,
-  Brain
+  Brain,
+  ScanSearch
 } from "lucide-react";
 import { getLogoUrl } from "@/lib/api";
 
@@ -22,6 +23,7 @@ const NAV_ITEMS = [
   { path: "/delegation", label: "Delegation", icon: ListTodo, testId: "nav-delegation" },
   { path: "/approvals", label: "Approvals", icon: ShieldCheck, testId: "nav-approvals" },
   { path: "/projects", label: "Projects", icon: FolderOpen, testId: "nav-projects" },
+  { path: "/testing", label: "Testing Centre", icon: ScanSearch, testId: "nav-testing" },
   { path: "/budget", label: "Budget", icon: DollarSign, testId: "nav-budget" },
   { path: "/memory", label: "Memory", icon: Brain, testId: "nav-memory" },
   { path: "/models", label: "Models", icon: Cpu, testId: "nav-models" },

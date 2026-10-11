@@ -76,6 +76,15 @@ export const testModel = (name) => api.get(`/models/test/${encodeURIComponent(na
 export const renderArtifact = (data) => api.post("/artifacts/render", data).then(r => r.data);
 export const downloadArtifact = (id) => `${API}/artifacts/${id}/download`;
 
+// ─── Testing Centre (development-only; token is never persisted in browser storage) ───
+const testingHeaders = (token) => ({ headers: { "X-Testing-Token": token } });
+export const getTestingConfig = (token) =>
+  api.get("/testing/config", testingHeaders(token)).then(r => r.data);
+export const getTestingScans = (token) =>
+  api.get("/testing/scans", testingHeaders(token)).then(r => Array.isArray(r.data) ? r.data : []);
+export const createTestingScan = (data, token) =>
+  api.post("/testing/scans", data, testingHeaders(token)).then(r => r.data);
+
 // ─── WebSocket ───
 export const getWsUrl = (projectId) => {
   const base = BACKEND_URL || window.location.origin.replace(":3000", ":12000");

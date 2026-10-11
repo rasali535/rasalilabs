@@ -1476,7 +1476,7 @@ async def render_html_to_png(html_content: str, project_id: str) -> str:
             page = await browser.new_page(viewport={"width": 1280, "height": 720})
             
             # Go to the file instead of set_content to allow relative paths
-            await page.goto(f"file:///{str(temp_html).replace('\\', '/')}")
+            await page.goto(temp_html.resolve().as_uri())
             
             # Wait for content to load and potential animations to settle
             await page.wait_for_load_state("networkidle")
@@ -2552,6 +2552,14 @@ async def cognee_improve(request: Dict[str, Any]):
         return {"status": "error", "code": r.status_code, "detail": r.text}
     except Exception as e:
         return {"status": "failed", "detail": str(e)}
+
+# Stage 1 Testing Centre: opt-in only; kept separate from the agent engine.
+if __package__:
+    from .testing_centre.router import create_testing_router
+else:
+    from testing_centre.router import create_testing_router
+
+app.include_router(create_testing_router(db), prefix="/api")
 
 app.include_router(api_router)
 
