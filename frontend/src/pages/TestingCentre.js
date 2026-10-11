@@ -13,8 +13,11 @@ import {
 } from "lucide-react";
 import { createTestingScan, getTestingConfig, getTestingScans } from "@/lib/api";
 
-const getError = (error) =>
-  error?.response?.data?.detail || error?.message || "Request failed.";
+const getError = (error) => {
+  const detail = error?.response?.data?.detail;
+  if (Array.isArray(detail)) return detail.map((item) => item.msg || "Invalid input").join("; ");
+  return typeof detail === "string" ? detail : error?.message || "Request failed.";
+};
 
 export default function TestingCentre() {
   const [token, setToken] = useState("");
