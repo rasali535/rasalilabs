@@ -9,6 +9,9 @@ the existing AI-agent boardroom, project system and availability scans intact.
   console errors, failed requests and HTTP 4xx/5xx resource responses
 - DOM smoke signals: empty visible content, broken image elements, placeholder
   navigation anchors, missing title and horizontal overflow
+- Up to four read-only same-origin, no-query/fragment links checked with HEAD
+  requests, without following redirects. A 404/410 is reported as broken;
+  unsupported or blocked HEAD responses are not automatically called broken
 - Three preset viewports: desktop 1366×768, tablet 820×1180, mobile 390×844
 - Navigation timing, DOMContentLoaded timing, first contentful paint when available
 - Bounded JPEG screenshot per viewport, stored in MongoDB in a separate evidence
@@ -24,8 +27,8 @@ security scores, compliance certifications or AI-generated test outcomes.
   payment testing, account flows, or write operations
 - No clicks or form submissions; no arbitrary user-journey automation
 - No Lighthouse score or full performance audit (only browser timing signals)
-- No exhaustive link crawling. Placeholder anchors and broken image elements
-  are checked; full internal destination validation is a separate enhancement
+- No exhaustive link crawling. Only a bounded sample of same-origin HEAD checks
+  and placeholder anchors is included; full link crawling is out of scope
 - Does not prove a site is safe, fully functional or free of vulnerabilities
 - No multitenant production access, verified customer ownership, queued workers
   or long-term scheduled checks
