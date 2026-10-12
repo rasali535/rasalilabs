@@ -2524,10 +2524,7 @@ async def cognee_datasets():
         async with httpx.AsyncClient(timeout=5.0) as c:
             r = await c.get(
                 f"{COGNEE_API_URL}/api/v1/datasets/",
-                headers={
-                    "X-Api-Key": COGNEE_API_KEY,
-                    "X-Tenant-Id": COGNEE_TENANT_ID,
-                },
+                headers=CogneeService._headers(),
             )
         return r.json() if r.status_code == 200 else []
     except Exception:
