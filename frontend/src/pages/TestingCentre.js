@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { createTestingScan, getTestingConfig, getTestingScans, getTestingEvidence } from "@/lib/api";
 import SecurityReport from "@/components/SecurityReport";
+import SpecialistReview from "@/components/SpecialistReview";
 
 const getError = (error) => {
   const detail = error?.response?.data?.detail;
@@ -383,6 +384,8 @@ export default function TestingCentre() {
                         {(active.result?.limitations || active.result?.not_tested || []).map((item) => <li key={item}>{item}</li>)}
                       </ul>
                     </div>
+                    <SpecialistReview scan={active} token={token.trim()}
+                                      aiEnabled={Boolean(config.agent_ai_enabled)} />
                   </div>
                 )}
               </section>

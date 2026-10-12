@@ -205,7 +205,7 @@ def test_passive_route_off_by_default_and_requires_network_isolation(monkeypatch
     auth = {"X-Testing-Token": TOKEN}
     response = client.get("/api/testing/config", headers=auth)
     assert response.status_code == 200
-    assert response.json()["stage"] == 3
+    assert response.json()["stage"] >= 3  # Stage 4 adds agents without removing Stage 3
     assert response.json()["passive_security_enabled"] is False
     blocked = client.post("/api/testing/scans", headers=auth,
         json={"url": "https://example.com/", "test_type": "passive_security"})

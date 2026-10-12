@@ -86,6 +86,12 @@ export const createTestingScan = (data, token) =>
   api.post("/testing/scans", data, testingHeaders(token)).then(r => r.data);
 export const getTestingEvidence = (id, token) =>
   api.get(`/testing/evidence/${encodeURIComponent(id)}`, testingHeaders(token)).then(r => r.data);
+export const getTestingAgents = (token) =>
+  api.get("/testing/agents", testingHeaders(token)).then(r => r.data);
+export const getTestingReviews = (scanId, token) =>
+  api.get(`/testing/scans/${encodeURIComponent(scanId)}/reviews`, testingHeaders(token)).then(r => Array.isArray(r.data) ? r.data : []);
+export const createTestingReview = (scanId, useAi, token) =>
+  api.post(`/testing/scans/${encodeURIComponent(scanId)}/reviews`, { use_ai: useAi }, testingHeaders(token)).then(r => r.data);
 
 // ─── WebSocket ───
 export const getWsUrl = (projectId) => {
