@@ -56,5 +56,14 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install existing frontend dependencies (baseline lockfiles are out of sync)
         run: npm install --legacy-peer-deps --no-audit --no-fund --prefix frontend
+      - name: Verify secured frontend API and WebSocket routing
+        run: cd frontend && CI=true npm test -- --watchAll=false --runInBand --testPathPattern=apiRouting.test.js
       - name: Build full existing React application
         run: cd frontend && CI=false npm run build
+      - name: Ensure no obsolete Render endpoint in production JavaScript
+        run: |
+          if grep -rlF "rasalilabs.onrender.com" frontend/build/static/js; then
+            echo "Blocked: bundle still includes obsolete Render host"
+            exit 1
+          fi
+          grep -rlF "rasalilabs-api-staging.onrender.com" frontend/build/static/js > /dev/null
