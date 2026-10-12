@@ -230,6 +230,7 @@ def setup_config(monkeypatch):
     monkeypatch.setenv("TESTING_CENTRE_ENABLED", "true")
     monkeypatch.setenv("TESTING_ALLOWED_HOSTS", "example.com")
     monkeypatch.setenv("TESTING_ACCESS_TOKEN", TOKEN)
+    monkeypatch.setenv("TESTING_SCAN_EXECUTION_ENABLED", "true")  # offline mocked execution only
 
 
 def test_access_denied_by_default_and_on_wrong_token(monkeypatch):
@@ -242,6 +243,34 @@ def test_access_denied_by_default_and_on_wrong_token(monkeypatch):
     assert client.get("/api/testing/scans").status_code == 403
     assert client.get("/api/testing/scans", headers={"X-Testing-Token": "incorrect"}).status_code == 403
     assert client.get("/api/testing/config", headers={"X-Testing-Token": TOKEN}).status_code == 200
+
+
+def test_operator_read_only_mode_blocks_scans_without_dns_or_network(monkeypatch):
+    setup_config(monkeypatch)
+    monkeypatch.delenv("TESTING_SCAN_EXECUTION_ENABLED", raising=False)
+    db = FakeDB()
+    client = client_for(db)
+    auth = {"X-Testing-Token": TOKEN}
+
+    status = client.get("/api/testing/status").json()
+    assert status["mode"] == "operator_configured"
+    assert status["scan_execution_enabled"] is False
+
+    config = client.get("/api/testing/config", headers=auth)
+    assert config.status_code == 200
+    assert config.json()["read_only_mode"] is True
+    assert config.json()["scan_execution_enabled"] is False
+    assert client.get("/api/testing/scans", headers=auth).status_code == 200
+    assert client.post("/api/testing/scans", headers=auth, json={
+        "url": "https://example.com/", "test_type": "availability",
+    }).status_code == 503
+    assert client.post("/api/testing/scans", headers=auth, json={
+        "url": "https://example.com/", "test_type": "browser_smoke",
+    }).status_code == 503
+    assert client.post("/api/testing/scans", headers=auth, json={
+        "url": "https://example.com/", "test_type": "passive_security",
+    }).status_code == 503
+    assert db.testing_scans.docs == []
 
 
 def test_scan_create_persist_history_and_failure_reporting(monkeypatch):
