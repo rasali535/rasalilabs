@@ -2576,6 +2576,15 @@ app.include_router(
     prefix="/api",
 )
 
+# Stage 6A customer authentication and tenant-scoped queue are independent
+# from the legacy operator Testing Centre. Disabled unless configured.
+if __package__:
+    from .testing_centre.workspace_router import workspace_router
+else:
+    from testing_centre.workspace_router import workspace_router
+
+app.include_router(workspace_router(db), prefix="/api")
+
 app.include_router(api_router)
 
 # CORS is handled at the top of the file to ensure it captures all requests.
