@@ -1,6 +1,6 @@
 import "@/index.css";
 import "@/App.css";
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Outlet } from "react-router-dom";
 import { Toaster } from "sonner";
 import Sidebar from "@/components/Sidebar";
 import ChatDrawer from "@/components/ChatDrawer";
@@ -17,6 +17,11 @@ import TestingCentre from "@/pages/TestingCentre";
 import WorkspaceTesting from "@/pages/WorkspaceTesting";
 import LegacyOperatorAccess from "@/components/LegacyOperatorAccess";
 
+function OperatorLayout() {
+  // The chat drawer is private: never mount it on a locked or customer page.
+  return <><Outlet /><ChatDrawer /></>;
+}
+
 function App() {
   return (
     <BrowserRouter>
@@ -25,6 +30,7 @@ function App() {
         <main className="flex-1 overflow-hidden">
           <Routes>
             <Route element={<LegacyOperatorAccess />}>
+              <Route element={<OperatorLayout />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/boardroom/:meetingId?" element={<Boardroom />} />
             <Route path="/dialogue" element={<Dialogue />} />
@@ -34,13 +40,13 @@ function App() {
             <Route path="/budget" element={<Budget />} />
             <Route path="/memory" element={<Memory />} />
             <Route path="/testing" element={<TestingCentre />} />
+              <Route path="/models" element={<Models />} />
+              </Route>
             </Route>
             <Route path="/workspace-testing" element={<WorkspaceTesting />} />
-            <Route path="/models" element={<Models />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
-        <ChatDrawer />
         <Toaster
           position="bottom-right"
           toastOptions={{
