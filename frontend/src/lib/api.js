@@ -115,6 +115,9 @@ export const renderArtifact = (data) => api.post("/artifacts/render", data).then
 export const downloadArtifact = (id) => `${API}/artifacts/${id}/download`;
 
 // ─── Testing Centre (development-only; token is never persisted in browser storage) ───
+export const getTestingStatus = () =>
+  api.get("/testing/status").then(r => r.data);
+
 const testingHeaders = (token) => ({ headers: { "X-Testing-Token": token } });
 export const getTestingConfig = (token) =>
   api.get("/testing/config", testingHeaders(token)).then(r => r.data);
