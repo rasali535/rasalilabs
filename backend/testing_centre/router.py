@@ -62,6 +62,12 @@ def create_testing_router(db, agent_provider=None, agent_model_name=None) -> API
     def require_persistent_db() -> None:
         if getattr(db, "_is_mock", False):
             raise HTTPException(status_code=503, detail="Persistent scan storage is unavailable.")
+    
+    def execution_enabled() -> bool:
+        # One enable flag grants history/reviews access; a SECOND opt-in is
+        # required for any outbound scan request. This is NOT a firewall:
+        # never enable execution on a shared API without real egress isolation.
+        return os.getenv("TESTING_SCAN_EXECUTION_ENABLED", "false").lower() == "true"
 
     def browser_enabled() -> bool:
         return (os.getenv("TESTING_BROWSER_ENABLED", "false").lower() == "true"
@@ -98,7 +104,7 @@ def create_testing_router(db, agent_provider=None, agent_model_name=None) -> API
             mode = "operator_configured"
         return {
             "mode": mode,
-            "scan_execution_enabled": mode == "operator_configured",
+            "scan_execution_enabled": mode == "operator_configured" and execution_enabled(),
             "authentication": "separate_testing_token",
             "availability_method": "tls_pinned_https_head",
             "public_signup_enabled": False,
@@ -120,6 +126,8 @@ def create_testing_router(db, agent_provider=None, agent_model_name=None) -> API
             "passive_security_enabled": passive_security_enabled(),
             "browser_enabled": browser_enabled(),
             "enabled": True,
+            "scan_execution_enabled": execution_enabled(),
+            "read_only_mode": not execution_enabled(),
             "allowed_hosts": sorted(config.allowed_hosts),
             "capabilities": ["HTTP availability", "response latency", "scan history"]
             + (["Browser functional smoke", "Desktop/tablet/mobile checks", "Screenshots", "Navigation timing"] if browser_enabled() else [])
@@ -348,6 +356,11 @@ def create_testing_router(db, agent_provider=None, agent_model_name=None) -> API
         payload: ScanCreate, config: TestingConfig = Depends(require_testing_access)
     ):
         require_persistent_db()
+        if not execution_enabled():
+            raise HTTPException(
+                status_code=503,
+                detail="Scan runner is locked. Operator history and analysis are read-only until a verified isolated execution environment is approved.",
+            )
         try:
             clean_url, host = await validate_target(payload.url.strip(), config.allowed_hosts)
         except ValueError as exc:
