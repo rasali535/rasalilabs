@@ -94,6 +94,7 @@ def test_expired_domain_fails_before_fetch():
     async def scenario():
         db = fake_db()
         db.testing_jobs.docs.append(job(status="running", attempts=1))
+        db.testing_jobs.docs[0]["worker_id"] = "worker-1"
         add_domain(db, expires=(utcnow() - timedelta(days=1)).isoformat())
         called = []
         async def checker(*_):
@@ -159,6 +160,7 @@ def test_no_domain_proof_cannot_call_network():
     async def scenario():
         db = fake_db()
         db.testing_jobs.docs.append(job(status="running", attempts=1))
+        db.testing_jobs.docs[0]["worker_id"] = "worker-x"
         calls = []
         async def checker(*_):
             calls.append(True)
