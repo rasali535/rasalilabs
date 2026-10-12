@@ -2559,7 +2559,22 @@ if __package__:
 else:
     from testing_centre.router import create_testing_router
 
-app.include_router(create_testing_router(db), prefix="/api")
+# Stage 4 optionally uses the existing configured AI/ML client for
+# explanation-only notes. Unlike legacy agent chat, it never writes scan
+# findings to Cognee or silently substitutes simulated LLM responses.
+async def _testing_agent_ai_provider(messages):
+    return await asyncio.to_thread(
+        _aiml_chat, messages, 800, model_config["aiml_model"]
+    )
+
+app.include_router(
+    create_testing_router(
+        db,
+        agent_provider=_testing_agent_ai_provider if model_config.get("aiml_api_key") else None,
+        agent_model_name=model_config.get("aiml_model"),
+    ),
+    prefix="/api",
+)
 
 app.include_router(api_router)
 
