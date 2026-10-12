@@ -73,6 +73,9 @@ export default function SecurityReport({ report }) {
                   {item.severity}
                 </span>
                 <span className="text-[10px] text-zinc-500">{item.cwe || "Unmapped"}</span>
+                {item.owasp_top_10_2025_related && (
+                  <span className="text-[10px] text-zinc-500">{item.owasp_top_10_2025_related} (related)</span>
+                )}
                 <span className="text-[10px] text-zinc-500">Confidence: {item.confidence || "Unspecified"}</span>
               </div>
               <p className="text-sm mt-2 font-medium">{item.title}</p>
