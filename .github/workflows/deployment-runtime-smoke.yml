@@ -1,0 +1,29 @@
+name: Deployment Runtime Import Smoke
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "requirements.txt"
+      - "backend/**"
+      - "api/**"
+      - "scripts/check_deployment_imports.py"
+      - ".github/workflows/deployment-runtime-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  root-api-dependencies:
+    name: Clean root-requirements API import
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install ONLY deployment root dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Import deployed API and verify Stage 6A route registration
+        run: python scripts/check_deployment_imports.py
