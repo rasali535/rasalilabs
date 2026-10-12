@@ -4,7 +4,7 @@ import axios from "axios";
 // account and NOT the publicly routed Vercel Python function.
 // For future production migration, configure REACT_APP_BACKEND_URL explicitly
 // at build time. No credentials belong in this public frontend variable.
-const configuredBackend = (process.env.REACT_APP_BACKEND_URL || "").trim().replace(/\\/+$/, "");
+const configuredBackend = (process.env.REACT_APP_BACKEND_URL || "").trim().replace(new RegExp("/+$"), "");
 export const BACKEND_URL = configuredBackend || "https://rasalilabs-api-staging.onrender.com";
 const API = `${BACKEND_URL}/api`;
 
