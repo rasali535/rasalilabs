@@ -15,6 +15,7 @@ import {
 import { createTestingScan, getTestingConfig, getTestingScans, getTestingEvidence } from "@/lib/api";
 import SecurityReport from "@/components/SecurityReport";
 import SpecialistReview from "@/components/SpecialistReview";
+import RepairWorkbench from "@/components/RepairWorkbench";
 
 const getError = (error) => {
   const detail = error?.response?.data?.detail;
@@ -386,6 +387,7 @@ export default function TestingCentre() {
                     </div>
                     <SpecialistReview scan={active} token={token.trim()}
                                       aiEnabled={Boolean(config.agent_ai_enabled)} />
+                    <RepairWorkbench scan={active} token={token.trim()} config={config} />
                   </div>
                 )}
               </section>
