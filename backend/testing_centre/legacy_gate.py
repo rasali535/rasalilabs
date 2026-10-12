@@ -5,6 +5,7 @@ lock, NOT a multi-tenant user authentication system. Customer endpoints
 remain separate and do not gain access to boardroom data.
 """
 import os
+import re
 import secrets
 from urllib.parse import urlsplit
 
@@ -30,7 +31,7 @@ def gate_enforced():
 def operator_configured():
     secret = os.getenv("LEGACY_OPERATOR_TOKEN", "")
     # Avoid known development strings; this must be an independent secret.
-    return (len(secret.encode("utf-8")) >= 48 and
+    return (bool(re.fullmatch(r"[A-Za-z0-9_-]{48,128}", secret)) and
             secret.lower() not in ("changeme", "change-me", "development") and
             secret != os.getenv("TESTING_ACCESS_TOKEN", "\x00") and
             secret != os.getenv("TESTING_WORKSPACE_JWT_SECRET", "\x00"))
