@@ -250,6 +250,8 @@ class CogneeService:
 
     @staticmethod
     def _headers() -> dict:
+        if not COGNEE_API_KEY:
+            raise RuntimeError("Cognee integration is disabled: credential not configured.")
         return {
             "X-Api-Key": COGNEE_API_KEY,
             "X-Tenant-Id": COGNEE_TENANT_ID,
@@ -2501,10 +2503,7 @@ async def cognee_status():
         async with httpx.AsyncClient(timeout=5.0) as c:
             r = await c.get(
                 f"{COGNEE_API_URL}/api/v1/datasets/",
-                headers={
-                    "X-Api-Key": COGNEE_API_KEY,
-                    "X-Tenant-Id": COGNEE_TENANT_ID,
-                },
+                headers=CogneeService._headers(),
             )
         if r.status_code == 200:
             datasets = r.json()
