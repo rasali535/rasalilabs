@@ -23,7 +23,7 @@ from .github_drafts import (
 from .scanner import check_availability
 from .browser import browser_audit
 from .passive_security import passive_security_audit
-from .security import TestingConfig, require_testing_access, validate_target
+from .security import TestingConfig, get_config, require_testing_access, validate_target
 
 
 class RepairCreate(BaseModel):
@@ -62,6 +62,12 @@ def create_testing_router(db, agent_provider=None, agent_model_name=None) -> API
     def require_persistent_db() -> None:
         if getattr(db, "_is_mock", False):
             raise HTTPException(status_code=503, detail="Persistent scan storage is unavailable.")
+    
+    def execution_enabled() -> bool:
+        # One enable flag grants history/reviews access; a SECOND opt-in is
+        # required for any outbound scan request. This is NOT a firewall:
+        # never enable execution on a shared API without real egress isolation.
+        return os.getenv("TESTING_SCAN_EXECUTION_ENABLED", "false").lower() == "true"
 
     def browser_enabled() -> bool:
         return (os.getenv("TESTING_BROWSER_ENABLED", "false").lower() == "true"
@@ -79,6 +85,36 @@ def create_testing_router(db, agent_provider=None, agent_model_name=None) -> API
     def repair_publisher_enabled() -> bool:
         return publisher_configured()
 
+    @router.get("/status")
+    async def testing_status():
+        """No token needed: honest setup state, never credentials or hostnames.
+
+        This does not perform scanning, DNS lookups or external API calls.
+        Browser/security execution and per-host scopes remain private to
+        the operator-authorized /config endpoint.
+        """
+        cfg = get_config()
+        if not cfg.enabled:
+            mode = "disabled"
+        elif not cfg.configured:
+            mode = "configuration_required"
+        elif getattr(db, "_is_mock", False):
+            mode = "storage_unavailable"
+        else:
+            mode = "operator_configured"
+        return {
+            "mode": mode,
+            "scan_execution_enabled": mode == "operator_configured" and execution_enabled(),
+            "authentication": "separate_testing_token",
+            "availability_method": "tls_pinned_https_head",
+            "public_signup_enabled": False,
+            "worker_isolation_verified": False,
+            "notice": (
+                "An enabled operator preview is not a production-isolated "
+                "worker or security certification."
+            ),
+        }
+
     @router.get("/config")
     async def testing_config(config: TestingConfig = Depends(require_testing_access)):
         return {
@@ -90,6 +126,8 @@ def create_testing_router(db, agent_provider=None, agent_model_name=None) -> API
             "passive_security_enabled": passive_security_enabled(),
             "browser_enabled": browser_enabled(),
             "enabled": True,
+            "scan_execution_enabled": execution_enabled(),
+            "read_only_mode": not execution_enabled(),
             "allowed_hosts": sorted(config.allowed_hosts),
             "capabilities": ["HTTP availability", "response latency", "scan history"]
             + (["Browser functional smoke", "Desktop/tablet/mobile checks", "Screenshots", "Navigation timing"] if browser_enabled() else [])
@@ -318,10 +356,18 @@ def create_testing_router(db, agent_provider=None, agent_model_name=None) -> API
         payload: ScanCreate, config: TestingConfig = Depends(require_testing_access)
     ):
         require_persistent_db()
+        if not execution_enabled():
+            raise HTTPException(
+                status_code=503,
+                detail="Scan runner is locked. Operator history and analysis are read-only until a verified isolated execution environment is approved.",
+            )
         try:
             clean_url, host = await validate_target(payload.url.strip(), config.allowed_hosts)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if payload.test_type == "availability" and not clean_url.startswith("https://"):
+            raise HTTPException(status_code=422, detail="Availability checks require HTTPS.")
 
         if payload.test_type == "passive_security":
             if not passive_security_enabled():

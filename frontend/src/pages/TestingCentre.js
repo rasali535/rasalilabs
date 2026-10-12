@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   AlertTriangle,
@@ -12,7 +12,7 @@ import {
   ShieldCheck,
   Image as ImageIcon,
 } from "lucide-react";
-import { createTestingScan, getTestingConfig, getTestingScans, getTestingEvidence } from "@/lib/api";
+import { createTestingScan, getTestingConfig, getTestingScans, getTestingEvidence, getTestingStatus } from "@/lib/api";
 import SecurityReport from "@/components/SecurityReport";
 import SpecialistReview from "@/components/SpecialistReview";
 import RepairWorkbench from "@/components/RepairWorkbench";
@@ -35,14 +35,41 @@ export default function TestingCentre() {
   const [busy, setBusy] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const [readiness, setReadiness] = useState(null);
+  const [readinessError, setReadinessError] = useState("");
+
+  const refreshReadiness = useCallback(async () => {
+    setReadinessError("");
+    try {
+      const current = await getTestingStatus();
+      setReadiness(current);
+      return current;
+    } catch (err) {
+      setReadiness(null);
+      setReadinessError("Unable to reach the Testing Centre readiness endpoint. Check the configured backend.");
+      return null;
+    }
+  }, []);
+
+  useEffect(() => {
+    refreshReadiness();
+  }, [refreshReadiness]);
+
 
   const loadHistory = useCallback(async (providedToken) => {
     if (!providedToken) return;
     setLoading(true);
     setErrorMessage("");
     try {
-      // Resolve the opt-in feature gate FIRST. A disabled/testing-only API
-      // returns 503; do not fire another scan-history request in parallel.
+      // Status is public metadata only: don't attempt a protected config or
+      // history call until the operator preview is actually configured.
+      const current = await refreshReadiness();
+      if (!current || current.mode !== "operator_configured") {
+        setConfig(null);
+        setScans([]);
+        setErrorMessage("Operator testing is not configured on this backend. The preview must be enabled with a separate testing token and authorized hosts.");
+        return;
+      }
       const details = await getTestingConfig(providedToken);
       setConfig(details);
       const items = await getTestingScans(providedToken);
@@ -59,7 +86,7 @@ export default function TestingCentre() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [refreshReadiness]);
 
   const selectScan = (scan) => {
     setSelected(scan);
@@ -81,7 +108,7 @@ export default function TestingCentre() {
 
   const submitScan = async (event) => {
     event.preventDefault();
-    if (!token.trim() || !url.trim() || busy) return;
+    if (!token.trim() || !url.trim() || busy || !config?.scan_execution_enabled) return;
     setBusy(true);
     setErrorMessage("");
     try {
@@ -138,14 +165,57 @@ export default function TestingCentre() {
           </div>
         </div>
 
+        <section className="border border-[#252525] rounded-lg bg-[#111111] p-4 sm:p-5 space-y-3"
+          aria-label="Testing Centre readiness" data-testid="testing-readiness">
+          <div className="flex items-center justify-between gap-3">
+            <h2 className="text-sm font-semibold">Testing Centre readiness</h2>
+            <button type="button" onClick={refreshReadiness}
+              className="btn-secondary text-xs px-3 py-2 flex items-center gap-1">
+              <RefreshCw className="w-3 h-3" /> Refresh
+            </button>
+          </div>
+          {readinessError && <p role="alert" className="text-xs text-rose-300">{readinessError}</p>}
+          {!readiness && !readinessError && <p className="text-xs text-zinc-500">Checking service status...</p>}
+          {readiness && (
+            <div className="space-y-2">
+              <p className="text-sm" data-testid="testing-readiness-mode">
+                <span className="text-zinc-400">Operator preview: </span>
+                <span className={readiness.mode === "operator_configured"
+                  ? "text-emerald-300" : "text-amber-300"}>
+                  {readiness.mode.replaceAll("_", " ")}
+                </span>
+              </p>
+              <p className="text-xs text-zinc-400">
+                Availability method: verified TLS + IP-pinned HTTPS HEAD only.
+              </p>
+              {readiness.mode === "operator_configured" && !readiness.scan_execution_enabled && (
+                <p className="text-xs text-amber-200">
+                  Operator history and specialist reviews are available after unlocking.
+                  Live scan execution remains locked until isolated worker deployment.
+                </p>
+              )}
+              {readiness.mode !== "operator_configured" && (
+                <p className="text-xs text-amber-200">
+                  No live scans can run yet. An operator must enable the preview,
+                  provide its separate secret and approve destinations. Browser and
+                  security checks additionally require an isolated worker.
+                </p>
+              )}
+              <p className="text-xs text-zinc-500">
+                {readiness.notice}
+              </p>
+            </div>
+          )}
+        </section>
+
         <section className="border border-[#252525] rounded-lg p-4 sm:p-5 bg-[#111111] space-y-4" aria-label="Scan setup">
           <div className="flex gap-2 items-center">
             <LockKeyhole className="w-4 h-4 text-zinc-400" aria-hidden="true" />
             <h2 className="font-semibold text-sm">Development access</h2>
           </div>
           <p className="text-zinc-500 text-xs">
-            Ask your operator to enable the feature, approve the target hostname and supply
-            a testing token. The token stays in this tab's memory and is not saved to your browser.
+            Use a separate Testing Centre token after the readiness check reports
+            "operator configured". It is not the AI-agent unlock code and is never saved in browser storage.
           </p>
           <div className="flex flex-col sm:flex-row gap-2">
             <label className="sr-only" htmlFor="testing-access-token">Testing access token</label>
@@ -207,6 +277,12 @@ export default function TestingCentre() {
                   </option>
                 </select>
               </div>
+              {!config.scan_execution_enabled && (
+                <p className="text-xs text-amber-200 mb-3" role="status">
+                  Read-only preview: stored results are available, but new network checks
+                  cannot run until the execution safety gate is approved.
+                </p>
+              )}
               <form onSubmit={submitScan} className="flex flex-col sm:flex-row gap-2">
                 <label className="sr-only" htmlFor="testing-url">Approved website URL</label>
                 <input
@@ -221,8 +297,8 @@ export default function TestingCentre() {
                 />
                 <button
                   type="submit"
-                  disabled={busy}
-                  className="btn-primary px-5 py-2.5 text-sm flex items-center justify-center gap-2 shrink-0"
+                  disabled={busy || !config.scan_execution_enabled}
+                  className="btn-primary px-5 py-2.5 text-sm flex items-center justify-center gap-2 shrink-0 disabled:opacity-50"
                   data-testid="testing-start-scan"
                 >
                   {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}

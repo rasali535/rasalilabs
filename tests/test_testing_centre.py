@@ -82,23 +82,102 @@ class MockHttpClient:
         return Stream(self.statuses.pop(0))
 
 
-def test_availability_probe_get_fallback_and_redirect_no_follow():
-    calls = []
-    statuses = [405, 200]
-    def factory(**kwargs):
-        return MockHttpClient(statuses, calls, **kwargs)
-    result = asyncio.run(check_availability("https://example.com/", client_factory=factory))
-    assert result["http_status"] == 200
-    assert result["outcome"] == "pass"
-    assert calls == [("HEAD", "https://example.com/"), ("GET", "https://example.com/")]
+def test_availability_uses_only_pinned_tls_verified_head():
+    async def completed(url, host):
+        assert url == "https://example.com/"
+        assert host == "example.com"
+        return {
+            "reachable": True, "outcome": "warning",
+            "tls": {"verified": True}, "http_status": 302, "latency_ms": 23,
+            "coverage": {
+                "method": "pinned_public_ip_https_head",
+                "requests_sent": 1,
+                "response_body_read": False,
+                "redirects_followed": 0,
+            },
+        }
 
-    calls = []
-    statuses = [302]
-    def redirect_factory(**kwargs):
-        return MockHttpClient(statuses, calls, **kwargs)
-    result = asyncio.run(check_availability("https://example.com/", client_factory=redirect_factory))
+    result = asyncio.run(check_availability("https://example.com/", probe=completed))
+    assert result["http_status"] == 302
     assert result["redirect_not_followed"] is True
-    assert len(calls) == 1
+    assert result["outcome"] == "warning"
+    assert result["coverage"]["requests_sent"] == 1
+    assert result["coverage"]["response_body_read"] is False
+    assert result["tls_verified"] is True
+    assert not any("GET" in x for x in result["checks"])
+
+
+def test_availability_refuses_unverified_and_unsafe_observations():
+    async def missing_tls(url, host):
+        return {
+            "reachable": True, "http_status": 200,
+            "tls": {"verified": False}, "coverage": {
+                "method": "pinned_public_ip_https_head",
+                "requests_sent": 1, "response_body_read": False,
+            },
+        }
+
+    async def unpinned(url, host):
+        return {
+            "reachable": True, "http_status": 200,
+            "tls": {"verified": True}, "coverage": {
+                "method": "generic_http", "requests_sent": 1,
+                "response_body_read": False,
+            },
+        }
+
+    async def body_read(url, host):
+        return {
+            "reachable": True, "http_status": 200,
+            "tls": {"verified": True}, "coverage": {
+                "method": "pinned_public_ip_https_head",
+                "requests_sent": 1, "response_body_read": True,
+            },
+        }
+
+    for probe in (missing_tls, unpinned, body_read):
+        result = asyncio.run(check_availability("https://example.com/", probe=probe))
+        assert result["outcome"] == "fail"
+        assert result["http_status"] is None
+        assert result["coverage"]["requests_sent"] == 0
+
+    for url in ("http://example.com/", "https://user:pass@example.com/",
+                "https://example.com/?secret=1", "https://example.com:8443/"):
+        try:
+            asyncio.run(check_availability(url, probe=missing_tls))
+            assert False, "Expected invalid URL to fail: " + url
+        except ValueError:
+            pass
+
+
+def test_readiness_public_but_token_and_scans_are_protected(monkeypatch):
+    monkeypatch.delenv("TESTING_CENTRE_ENABLED", raising=False)
+    monkeypatch.delenv("TESTING_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("TESTING_ALLOWED_HOSTS", raising=False)
+    db = FakeDB()
+    client = client_for(db)
+    status = client.get("/api/testing/status")
+    assert status.status_code == 200
+    assert status.json()["mode"] == "disabled"
+    assert "allowed_hosts" not in status.text
+    assert "token" not in status.text.lower().replace("testing_token", "")
+    assert client.get("/api/testing/config").status_code == 503
+    setup_config(monkeypatch)
+    status = client.get("/api/testing/status")
+    assert status.json()["mode"] == "operator_configured"
+    assert status.json()["availability_method"] == "tls_pinned_https_head"
+    assert client.get("/api/testing/scans").status_code == 403
+    db._is_mock = True
+    assert client.get("/api/testing/status").json()["mode"] == "storage_unavailable"
+
+
+def test_readiness_configuration_required(monkeypatch):
+    monkeypatch.setenv("TESTING_CENTRE_ENABLED", "true")
+    monkeypatch.delenv("TESTING_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("TESTING_ALLOWED_HOSTS", raising=False)
+    client = client_for(FakeDB())
+    assert client.get("/api/testing/status").json()["mode"] == "configuration_required"
+
 
 
 class MockCursor:
@@ -151,6 +230,7 @@ def setup_config(monkeypatch):
     monkeypatch.setenv("TESTING_CENTRE_ENABLED", "true")
     monkeypatch.setenv("TESTING_ALLOWED_HOSTS", "example.com")
     monkeypatch.setenv("TESTING_ACCESS_TOKEN", TOKEN)
+    monkeypatch.setenv("TESTING_SCAN_EXECUTION_ENABLED", "true")  # offline mocked execution only
 
 
 def test_access_denied_by_default_and_on_wrong_token(monkeypatch):
@@ -163,6 +243,34 @@ def test_access_denied_by_default_and_on_wrong_token(monkeypatch):
     assert client.get("/api/testing/scans").status_code == 403
     assert client.get("/api/testing/scans", headers={"X-Testing-Token": "incorrect"}).status_code == 403
     assert client.get("/api/testing/config", headers={"X-Testing-Token": TOKEN}).status_code == 200
+
+
+def test_operator_read_only_mode_blocks_scans_without_dns_or_network(monkeypatch):
+    setup_config(monkeypatch)
+    monkeypatch.delenv("TESTING_SCAN_EXECUTION_ENABLED", raising=False)
+    db = FakeDB()
+    client = client_for(db)
+    auth = {"X-Testing-Token": TOKEN}
+
+    status = client.get("/api/testing/status").json()
+    assert status["mode"] == "operator_configured"
+    assert status["scan_execution_enabled"] is False
+
+    config = client.get("/api/testing/config", headers=auth)
+    assert config.status_code == 200
+    assert config.json()["read_only_mode"] is True
+    assert config.json()["scan_execution_enabled"] is False
+    assert client.get("/api/testing/scans", headers=auth).status_code == 200
+    assert client.post("/api/testing/scans", headers=auth, json={
+        "url": "https://example.com/", "test_type": "availability",
+    }).status_code == 503
+    assert client.post("/api/testing/scans", headers=auth, json={
+        "url": "https://example.com/", "test_type": "browser_smoke",
+    }).status_code == 503
+    assert client.post("/api/testing/scans", headers=auth, json={
+        "url": "https://example.com/", "test_type": "passive_security",
+    }).status_code == 503
+    assert db.testing_scans.docs == []
 
 
 def test_scan_create_persist_history_and_failure_reporting(monkeypatch):
