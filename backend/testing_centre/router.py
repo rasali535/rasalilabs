@@ -3,20 +3,24 @@
 Stage 1 is a single-operator development preview. Customer auth, ownership
 verification and durable scan workers are required before public launch.
 """
+import os
 import uuid
+import asyncio
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from .scanner import check_availability
+from .browser import browser_audit
 from .security import TestingConfig, require_testing_access, validate_target
 
 
 class ScanCreate(BaseModel):
     url: str = Field(min_length=10, max_length=2048)
     project_id: Optional[str] = Field(default=None, max_length=100)
+    test_type: Literal["availability", "browser_smoke"] = "availability"
 
 
 def timestamp() -> str:
@@ -30,14 +34,20 @@ def create_testing_router(db) -> APIRouter:
         if getattr(db, "_is_mock", False):
             raise HTTPException(status_code=503, detail="Persistent scan storage is unavailable.")
 
+    def browser_enabled() -> bool:
+        return (os.getenv("TESTING_BROWSER_ENABLED", "false").lower() == "true"
+                and os.getenv("TESTING_BROWSER_NETWORK_ISOLATED", "false").lower() == "true")
+
     @router.get("/config")
     async def testing_config(config: TestingConfig = Depends(require_testing_access)):
         return {
-            "stage": 1,
+            "stage": 2,
+            "browser_enabled": browser_enabled(),
             "enabled": True,
             "allowed_hosts": sorted(config.allowed_hosts),
-            "capabilities": ["HTTP availability", "response latency", "scan history"],
-            "not_included": ["penetration testing", "vulnerability scan", "browser functional tests"],
+            "capabilities": ["HTTP availability", "response latency", "scan history"]
+            + (["Browser functional smoke", "Desktop/tablet/mobile checks", "Screenshots", "Navigation timing"] if browser_enabled() else []),
+            "not_included": ["penetration testing", "vulnerability scanning", "Authenticated user journeys", "Full Lighthouse score"],
         }
 
     @router.get("/scans")
@@ -60,6 +70,18 @@ def create_testing_router(db) -> APIRouter:
             raise HTTPException(status_code=404, detail="Scan not found.")
         return doc
 
+    @router.get("/evidence/{evidence_id}")
+    async def get_evidence(evidence_id: str, config: TestingConfig = Depends(require_testing_access)):
+        require_persistent_db()
+        try:
+            doc = await db.testing_evidence.find_one({"id": evidence_id}, {"_id": 0})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to load evidence.") from exc
+        if not doc:
+            raise HTTPException(status_code=404, detail="Evidence not found.")
+        return {"id": evidence_id, "viewport": doc["viewport"],
+                "data_uri": "data:" + doc["media_type"] + ";base64," + doc["content_b64"]}
+
     @router.post("/scans", status_code=201)
     async def create_scan(
         payload: ScanCreate, config: TestingConfig = Depends(require_testing_access)
@@ -69,6 +91,13 @@ def create_testing_router(db) -> APIRouter:
             clean_url, host = await validate_target(payload.url.strip(), config.allowed_hosts)
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+        if payload.test_type == "browser_smoke":
+            if not browser_enabled():
+                raise HTTPException(status_code=503,
+                    detail="Browser scans require an enabled, network-isolated development worker.")
+            if not clean_url.startswith("https://"):
+                raise HTTPException(status_code=422, detail="Browser scans require HTTPS.")
 
         if payload.project_id:
             try:
@@ -85,7 +114,7 @@ def create_testing_router(db) -> APIRouter:
             "url": clean_url,
             "host": host,
             "status": "running",
-            "test_type": "availability",
+            "test_type": payload.test_type,
             "result": None,
             "created_at": now,
             "updated_at": now,
@@ -96,11 +125,31 @@ def create_testing_router(db) -> APIRouter:
         except Exception as exc:
             raise HTTPException(status_code=503, detail="Unable to persist scan.") from exc
 
-        # Bounded synchronous probe (not a background job). Stage 2 will
-        # introduce an isolated durable worker with strict egress controls.
-        result = await check_availability(clean_url)
+        # Stage 2 preview still uses a bounded in-request scan. Do not deploy
+        # as a public service or serverless runtime; use a dedicated isolated
+        # development worker with restricted network egress.
+        try:
+            if payload.test_type == "browser_smoke":
+                result = await asyncio.wait_for(browser_audit(clean_url, host), timeout=65)
+                evidence = result.pop("screenshots", [])
+                if evidence:
+                    for item in evidence:
+                        await db.testing_evidence.insert_one({**item, "scan_id": doc["id"]})
+                # Never duplicate base64 bytes in the scan history document.
+                result["screenshots"] = [
+                    {"id": item["id"], "viewport": item["viewport"], "media_type": item["media_type"]}
+                    for item in evidence
+                ]
+            else:
+                result = await check_availability(clean_url)
+        except Exception as exc:
+            result = {
+                "outcome": "fail", "reachable": False,
+                "error": type(exc).__name__,
+                "checks": [], "limitations": ["Scan execution failed; no test coverage confirmed."],
+            }
         doc.update({
-            "status": "completed" if result["reachable"] else "failed",
+            "status": "failed" if result["outcome"] == "fail" else "completed",
             "result": result,
             "updated_at": timestamp(),
             "finished_at": timestamp(),

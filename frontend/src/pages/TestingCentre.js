@@ -10,8 +10,9 @@ import {
   LockKeyhole,
   RefreshCw,
   ShieldCheck,
+  Image as ImageIcon,
 } from "lucide-react";
-import { createTestingScan, getTestingConfig, getTestingScans } from "@/lib/api";
+import { createTestingScan, getTestingConfig, getTestingScans, getTestingEvidence } from "@/lib/api";
 
 const getError = (error) => {
   const detail = error?.response?.data?.detail;
@@ -22,6 +23,9 @@ const getError = (error) => {
 export default function TestingCentre() {
   const [token, setToken] = useState("");
   const [url, setUrl] = useState("");
+  const [testType, setTestType] = useState("availability");
+  const [preview, setPreview] = useState(null);
+  const [evidenceBusy, setEvidenceBusy] = useState(false);
   const [scans, setScans] = useState([]);
   const [selected, setSelected] = useState(null);
   const [config, setConfig] = useState(null);
@@ -49,16 +53,34 @@ export default function TestingCentre() {
     }
   }, []);
 
+  const selectScan = (scan) => {
+    setSelected(scan);
+    setPreview(null);
+  };
+
+  const loadEvidence = async (id) => {
+    setEvidenceBusy(true);
+    setErrorMessage("");
+    try {
+      const evidence = await getTestingEvidence(id, token.trim());
+      setPreview(evidence);
+    } catch (error) {
+      setErrorMessage(getError(error));
+    } finally {
+      setEvidenceBusy(false);
+    }
+  };
+
   const submitScan = async (event) => {
     event.preventDefault();
     if (!token.trim() || !url.trim() || busy) return;
     setBusy(true);
     setErrorMessage("");
     try {
-      const result = await createTestingScan({ url: url.trim() }, token.trim());
-      setSelected(result);
+      const result = await createTestingScan({ url: url.trim(), test_type: testType }, token.trim());
+      selectScan(result);
       setUrl("");
-      toast.success("Availability check completed. Review the evidence.");
+      toast.success("Check recorded. Review the measured results.");
       await loadHistory(token.trim());
     } catch (error) {
       const message = getError(error);
@@ -88,7 +110,7 @@ export default function TestingCentre() {
           <div>
             <h1 className="font-['Chivo'] text-xl font-bold">Testing Centre</h1>
             <p className="text-xs text-zinc-500 mt-1">
-              Stage 1 · Development preview · Availability checks only
+              Stage 2 · Development preview · Live browser diagnostics
             </p>
           </div>
         </div>
@@ -100,9 +122,9 @@ export default function TestingCentre() {
           <div>
             <p className="text-sm font-medium text-amber-100">Not a security certification or penetration test</p>
             <p className="text-xs text-amber-200/70 mt-1 leading-5">
-              This first stage checks only an operator-approved website's HTTP availability.
-              Vulnerability scanning, functional browser tests, domain ownership verification,
-              and production customer accounts are not yet implemented.
+              Availability checks are available, with optional isolated Playwright browser
+              smoke tests. These are read-only observations of an approved URL, not penetration testing.
+              We do not verify ownership, execute login journeys or certify security.
             </p>
           </div>
         </div>
@@ -158,6 +180,21 @@ export default function TestingCentre() {
                 <Globe className="w-4 h-4 text-blue-400" aria-hidden="true" />
                 <h2 className="font-semibold text-sm">New availability check</h2>
               </div>
+              <div className="mb-3">
+                <label htmlFor="testing-mode" className="block text-xs text-zinc-400 mb-1">Test profile</label>
+                <select
+                  id="testing-mode"
+                  value={testType}
+                  onChange={(event) => setTestType(event.target.value)}
+                  className="w-full bg-[#0C0C0C] border border-[#333] rounded-md px-3 py-2.5 text-sm"
+                  data-testid="testing-mode-select"
+                >
+                  <option value="availability">Availability check (HTTP)</option>
+                  <option value="browser_smoke" disabled={!config.browser_enabled}>
+                    Live browser QA (desktop, tablet, mobile){config.browser_enabled ? "" : " — worker not enabled"}
+                  </option>
+                </select>
+              </div>
               <form onSubmit={submitScan} className="flex flex-col sm:flex-row gap-2">
                 <label className="sr-only" htmlFor="testing-url">Approved website URL</label>
                 <input
@@ -210,13 +247,13 @@ export default function TestingCentre() {
                     <button
                       key={scan.id}
                       type="button"
-                      onClick={() => setSelected(scan)}
+                      onClick={() => selectScan(scan)}
                       className={"w-full text-left border rounded-md p-3 hover:border-blue-600 " +
                         (active?.id === scan.id ? "border-blue-600 bg-blue-950/20" : "border-[#292929] bg-[#151515]")}
                     >
                       <span className="block text-sm truncate">{scan.host}</span>
                       <span className="block text-xs text-zinc-500 mt-1">
-                        {scan.status} · {new Date(scan.created_at).toLocaleString()}
+                        {scan.test_type === "browser_smoke" ? "Browser QA" : "HTTP"} · {scan.status} · {new Date(scan.created_at).toLocaleString()}
                       </span>
                     </button>
                   ))}
@@ -242,14 +279,28 @@ export default function TestingCentre() {
                         {outcome || active.status}
                       </span>
                     </div>
+                    {active.test_type === "browser_smoke" && (
+                      <div className="bg-[#0B0B0B] border border-[#282828] rounded-md p-3 space-y-1">
+                        <p className="text-xs text-zinc-500">Browser audit summary</p>
+                        <p className="text-sm">
+                          {active.result?.summary?.viewports_completed ?? 0}/3 viewports loaded ·
+                          {" "}{active.result?.summary?.high ?? 0} high ·
+                          {" "}{active.result?.summary?.medium ?? 0} medium ·
+                          {" "}{active.result?.summary?.low ?? 0} low
+                        </p>
+                        <p className="text-xs text-zinc-500">
+                          {active.result?.third_party_requests_blocked ?? 0} external/overflow requests blocked
+                        </p>
+                      </div>
+                    )}
                     <div className="grid grid-cols-2 gap-3">
                       <div className="bg-[#0B0B0B] border border-[#282828] rounded-md p-3">
                         <p className="text-xs text-zinc-500">HTTP status</p>
-                        <p className="font-mono text-lg mt-1">{active.result?.http_status ?? "—"}</p>
+                        <p className="font-mono text-lg mt-1">{active.result?.http_status ?? active.result?.viewports?.[0]?.http_status ?? "—"}</p>
                       </div>
                       <div className="bg-[#0B0B0B] border border-[#282828] rounded-md p-3">
                         <p className="text-xs text-zinc-500">Response time</p>
-                        <p className="font-mono text-lg mt-1">{active.result?.latency_ms ?? "—"} ms</p>
+                        <p className="font-mono text-lg mt-1">{active.result?.latency_ms ?? active.result?.elapsed_ms ?? "—"} ms</p>
                       </div>
                     </div>
                     {active.result?.redirect_not_followed && (
@@ -258,14 +309,72 @@ export default function TestingCentre() {
                     {active.result?.error && (
                       <p className="text-xs text-rose-300">Network check failed: {active.result.error}</p>
                     )}
+                    {active.test_type === "browser_smoke" && (
+                      <div className="space-y-4 border-t border-[#282828] pt-4">
+                        <div>
+                          <p className="font-medium text-xs mb-2">Observed findings</p>
+                          {!(active.result?.findings || []).length && (
+                            <p className="text-zinc-500 text-xs">No findings from the limited checks that completed.</p>
+                          )}
+                          <div className="space-y-2">
+                            {(active.result?.findings || []).map((item) => (
+                              <div key={item.id} className="border border-[#292929] rounded-md p-3 bg-[#0B0B0B]">
+                                <div className="flex flex-wrap items-center gap-2 mb-1">
+                                  <span className={
+                                    "text-[10px] uppercase font-semibold " +
+                                    (item.severity === "high" ? "text-rose-400" : item.severity === "medium" ? "text-amber-400" : "text-blue-400")
+                                  }>{item.severity}</span>
+                                  <span className="text-xs text-zinc-500">{item.viewport || "General"}</span>
+                                </div>
+                                <p className="font-medium text-xs">{item.title}</p>
+                                <p className="text-xs text-zinc-400 mt-1 break-words">{item.detail}</p>
+                                <p className="text-xs text-zinc-500 mt-2">Suggested action: {item.recommendation}</p>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <p className="font-medium text-xs mb-2">Viewport measurements</p>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            {(active.result?.viewports || []).map((view) => (
+                              <div key={view.name} className="p-2 rounded-md border border-[#292929] text-xs">
+                                <p className="font-semibold capitalize">{view.name}</p>
+                                <p className="text-zinc-500 mt-1">{view.width} × {view.height}</p>
+                                <p className="text-zinc-400 mt-1">DOM: {view.metrics?.dom_content_loaded_ms ?? "—"} ms</p>
+                                <p className="text-zinc-400">FCP: {view.metrics?.fcp_ms ?? "—"} ms</p>
+                                {view.evidence_id && (
+                                  <button
+                                    type="button"
+                                    disabled={evidenceBusy}
+                                    onClick={() => loadEvidence(view.evidence_id)}
+                                    className="text-blue-400 hover:underline mt-2 flex items-center gap-1"
+                                  ><ImageIcon className="w-3 h-3" /> View screenshot</button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                          {preview?.data_uri && (
+                            <div className="mt-3 border border-[#333] rounded-md p-2">
+                              <div className="flex justify-between text-xs pb-2">
+                                <span className="capitalize">{preview.viewport} screenshot</span>
+                                <button type="button" onClick={() => setPreview(null)}
+                                  className="text-zinc-400 hover:text-white">Close</button>
+                              </div>
+                              <img src={preview.data_uri} alt={preview.viewport + " viewport evidence"}
+                                   className="w-full rounded-md" />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                     <div className="border-t border-[#282828] pt-4">
                       <p className="text-xs font-medium mb-2">What was checked</p>
                       <ul className="text-xs text-zinc-400 space-y-1 list-disc pl-4">
-                        {(active.result?.checks || []).map((item) => <li key={item}>{item}</li>)}
+                        {(active.result?.checks || active.result?.tested_checks || []).map((item) => <li key={item}>{item}</li>)}
                       </ul>
                       <p className="text-xs font-medium mt-4 mb-2">Not tested</p>
                       <ul className="text-xs text-zinc-400 space-y-1 list-disc pl-4">
-                        {(active.result?.limitations || []).map((item) => <li key={item}>{item}</li>)}
+                        {(active.result?.limitations || active.result?.not_tested || []).map((item) => <li key={item}>{item}</li>)}
                       </ul>
                     </div>
                   </div>
