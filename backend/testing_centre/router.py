@@ -12,10 +12,16 @@ from typing import Optional, Literal
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
+from .agents import SPECIALISTS, build_review, enrich_review
+
 from .scanner import check_availability
 from .browser import browser_audit
 from .passive_security import passive_security_audit
 from .security import TestingConfig, require_testing_access, validate_target
+
+
+class ReviewCreate(BaseModel):
+    use_ai: bool = False
 
 
 class ScanCreate(BaseModel):
@@ -28,7 +34,7 @@ def timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def create_testing_router(db) -> APIRouter:
+def create_testing_router(db, agent_provider=None, agent_model_name=None) -> APIRouter:
     router = APIRouter(prefix="/testing", tags=["Testing Centre"])
 
     def require_persistent_db() -> None:
@@ -43,10 +49,17 @@ def create_testing_router(db) -> APIRouter:
         return (os.getenv("TESTING_PASSIVE_SECURITY_ENABLED", "false").lower() == "true"
                 and os.getenv("TESTING_SECURITY_NETWORK_ISOLATED", "false").lower() == "true")
 
+    def agent_llm_available() -> bool:
+        return (os.getenv("TESTING_AGENT_AI_ENABLED", "false").lower() == "true"
+                and os.getenv("TESTING_AGENT_AI_DISCLOSURE_ACK", "false").lower() == "true"
+                and agent_provider is not None)
+
     @router.get("/config")
     async def testing_config(config: TestingConfig = Depends(require_testing_access)):
         return {
-            "stage": 3,
+            "stage": 4,
+            "review_agents": [agent["role"] for agent in SPECIALISTS],
+            "agent_ai_enabled": agent_llm_available(),
             "passive_security_enabled": passive_security_enabled(),
             "browser_enabled": browser_enabled(),
             "enabled": True,
@@ -56,6 +69,10 @@ def create_testing_router(db) -> APIRouter:
             + (["Passive TLS, HTTP security headers, cookie and API response diagnostics"] if passive_security_enabled() else []),
             "not_included": ["penetration testing", "active vulnerability scanning", "Authenticated user journeys", "Full Lighthouse score"],
         }
+
+    @router.get("/agents")
+    async def get_testing_agents(config: TestingConfig = Depends(require_testing_access)):
+        return list(SPECIALISTS)
 
     @router.get("/scans")
     async def list_scans(config: TestingConfig = Depends(require_testing_access)):
@@ -76,6 +93,49 @@ def create_testing_router(db) -> APIRouter:
         if not doc:
             raise HTTPException(status_code=404, detail="Scan not found.")
         return doc
+
+    @router.get("/scans/{scan_id}/reviews")
+    async def scan_reviews(scan_id: str, config: TestingConfig = Depends(require_testing_access)):
+        require_persistent_db()
+        try:
+            scan = await db.testing_scans.find_one({"id": scan_id}, {"_id": 0})
+            if not scan:
+                raise HTTPException(status_code=404, detail="Scan not found.")
+            docs = await db.testing_reviews.find({"scan_id": scan_id}, {"_id": 0}).sort("created_at", -1).to_list(10)
+            return docs
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to load specialist reviews.") from exc
+
+    @router.post("/scans/{scan_id}/reviews", status_code=201)
+    async def create_scan_review(scan_id: str, payload: ReviewCreate,
+                                 config: TestingConfig = Depends(require_testing_access)):
+        require_persistent_db()
+        if payload.use_ai and not agent_llm_available():
+            raise HTTPException(status_code=503,
+                                detail="Opt-in AI analysis is disabled or not configured.")
+        try:
+            scan = await db.testing_scans.find_one({"id": scan_id}, {"_id": 0})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to load source scan.") from exc
+        if not scan:
+            raise HTTPException(status_code=404, detail="Scan not found.")
+        try:
+            review = build_review(scan)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        if payload.use_ai:
+            review = await enrich_review(review, provider=agent_provider,
+                                         model_name=agent_model_name or "configured model")
+        try:
+            # Reports are derived only from existing scans; no HTTP requests or
+            # agent execution in this route, unless explicitly opted into AI.
+            await db.testing_reviews.insert_one(dict(review))
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to save specialist review.") from exc
+        return review
 
     @router.get("/evidence/{evidence_id}")
     async def get_evidence(evidence_id: str, config: TestingConfig = Depends(require_testing_access)):
