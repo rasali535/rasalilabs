@@ -126,6 +126,27 @@ def test_passive_security_requires_verified_tls_and_identical_status():
     assert assess_retest(case, original, later)["result"] == "inconclusive"
 
 
+def test_finding_cap_is_not_mistaken_for_a_clean_retest():
+    original = scan()
+    case = build_repair_case(original, "f1")
+    later = scan(scan_id="s2", include=False, date="2026-10-12T09:00:00+00:00")
+    later["result"]["findings"] = [
+        {"id": "other-" + str(i), "category": "runtime",
+         "title": "Other issue " + str(i), "viewport": "desktop"}
+        for i in range(60)
+    ]
+    assert assess_retest(case, original, later)["result"] == "inconclusive"
+    passive = scan(kind="passive_security")
+    p_case = build_repair_case(passive, "f1")
+    retry = scan(scan_id="s3", kind="passive_security", include=False,
+                 date="2026-10-12T09:00:00+00:00")
+    retry["result"]["findings"] = [
+        {"id": "other-" + str(i), "code": "OTHER_" + str(i)}
+        for i in range(25)
+    ]
+    assert assess_retest(p_case, passive, retry)["result"] == "inconclusive"
+
+
 def test_route_persists_proposed_case_and_evidence_only_verification(monkeypatch):
     setup_config(monkeypatch)
     db = FakeDB()
