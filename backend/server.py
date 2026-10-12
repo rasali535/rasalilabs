@@ -241,7 +241,7 @@ _ollama_cache = {"available": None, "checked_at": 0, "models": []}
 
 # ─── Cognee Knowledge Graph Config ───
 COGNEE_API_URL  = os.environ.get('COGNEE_API_URL',  'https://tenant-23a22d02-a9b6-467d-a3ba-3b9eca2af1be.aws.cognee.ai')
-COGNEE_API_KEY  = os.environ.get('COGNEE_API_KEY',  '3dd3f6ee0a713c1dcc2158b59ad33869dc23e2291b5dca364f6c679177bf114f')
+COGNEE_API_KEY  = os.environ.get('COGNEE_API_KEY', '')  # no hardcoded fallback; revoke leaked key separately
 COGNEE_TENANT_ID = os.environ.get('COGNEE_TENANT_ID', '23a22d02-a9b6-467d-a3ba-3b9eca2af1be')
 COGNEE_DATASET  = os.environ.get('COGNEE_DATASET',  'rasalilabs')
 
@@ -374,6 +374,36 @@ if not origins:
         "http://localhost:5174",
         "https://rasalilabs.vercel.app",
     ]
+
+# Enforce a separate operator lock on the legacy AI-agent HTTP/WS APIs.
+# IMPORTANT: rollout mode is off unless LEGACY_OPERATOR_AUTH_ENFORCED or
+# customer workspace auth is enabled. Configure the operator secret first.
+if __package__:
+    from .testing_centre.legacy_gate import (
+        LegacyOperatorGate, gate_enforced, operator_configured, validate_operator_token,
+    )
+else:
+    from testing_centre.legacy_gate import (
+        LegacyOperatorGate, gate_enforced, operator_configured, validate_operator_token,
+    )
+
+@app.get("/api/legacy-access/status")
+async def legacy_access_status():
+    return {"required": gate_enforced(), "configured": operator_configured() if gate_enforced() else False}
+
+
+@app.post("/api/legacy-access/check")
+async def legacy_access_check(request: Request):
+    if not gate_enforced():
+        return {"authorized": True}
+    if not operator_configured():
+        raise HTTPException(503, "Operator security configuration is unavailable.")
+    if not validate_operator_token(request.headers.get("X-Legacy-Operator-Token", "")):
+        raise HTTPException(401, "Invalid operator access token.")
+    return {"authorized": True}
+
+
+app.add_middleware(LegacyOperatorGate)
 
 app.add_middleware(
     CORSMiddleware,
