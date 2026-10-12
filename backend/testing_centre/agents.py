@@ -228,6 +228,8 @@ def _parse_ai_notes(text, permitted_ids):
         note = _safe_text(obj.get("note"), 350)
         if not isinstance(issue_id, str) or issue_id not in permitted_ids or not note or issue_id in seen:
             continue
+        if re.search(r"\b(fixed|verified|certified|passed|fully secure|no vulnerabilities)\b", note, re.I):
+            continue
         seen.add(issue_id)
         notes.append({"id": issue_id, "note": note, "state": "unverified_ai_suggestion"})
     return notes
@@ -236,8 +238,9 @@ def _parse_ai_notes(text, permitted_ids):
 async def enrich_review(review, *, provider, model_name):
     """Explicit opt-in: use configured model only to suggest per-ID notes.
 
-    External page content is untrusted. The provider receives redacted evidence,
-    not raw screenshots, cookie values, source text, URL or user credentials.
+    External page content is untrusted. The provider receives finding titles,
+    categories and severity only, not observation text, screenshots,
+    cookie values, source text, URL or user credentials.
     Invalid model results are discarded; no fallback is represented as an AI run.
     """
     candidate_ids = set()
@@ -252,7 +255,8 @@ async def enrich_review(review, *, provider, model_name):
             payload.append({
                 "id": issue_id, "role": role["role"],
                 "title": _safe_text(issue.get("title") or issue.get("description"), 120),
-                "observation": _safe_text(issue.get("observation"), 140),
+                "category": _safe_text(issue.get("category") or "coverage", 35),
+                "severity": _safe_text(issue.get("severity") or "not_tested", 20),
             })
     if not payload:
         review["ai"] = {"status": "no_evidence_to_enrich", "model": None, "accepted_notes": 0}
@@ -273,7 +277,7 @@ async def enrich_review(review, *, provider, model_name):
     try:
         # Timeout limits API wait, not the lifetime of a blocked worker thread.
         result = await asyncio.wait_for(provider(messages), timeout=18)
-    except (Exception, asyncio.CancelledError):
+    except Exception:
         review["ai"] = {"status": "unavailable", "model": None, "accepted_notes": 0}
         return review
 
