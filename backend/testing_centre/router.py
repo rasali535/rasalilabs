@@ -6,18 +6,40 @@ verification and durable scan workers are required before public launch.
 import os
 import uuid
 import asyncio
+import secrets
 from datetime import datetime, timezone
 from typing import Optional, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header
 from pydantic import BaseModel, Field
 
 from .agents import SPECIALISTS, build_review, enrich_review
+from .repairs import build_repair_case, assess_retest, repair_prompt
+from .github_drafts import (
+    GitHubDraftPublisher, GitHubPublishError,
+    publisher_configured, validate_publishing_input,
+)
 
 from .scanner import check_availability
 from .browser import browser_audit
 from .passive_security import passive_security_audit
 from .security import TestingConfig, require_testing_access, validate_target
+
+
+class RepairCreate(BaseModel):
+    finding_id: str = Field(min_length=1, max_length=90)
+
+
+class RepairCompare(BaseModel):
+    retest_scan_id: str = Field(min_length=1, max_length=90)
+
+
+class PublishRepair(BaseModel):
+    repo: str = Field(min_length=3, max_length=150)
+    file_path: str = Field(min_length=2, max_length=250)
+    expected_blob_sha: str = Field(min_length=40, max_length=40)
+    new_source: str = Field(min_length=1, max_length=48000)
+    approval_phrase: str
 
 
 class ReviewCreate(BaseModel):
@@ -54,10 +76,15 @@ def create_testing_router(db, agent_provider=None, agent_model_name=None) -> API
                 and os.getenv("TESTING_AGENT_AI_DISCLOSURE_ACK", "false").lower() == "true"
                 and agent_provider is not None)
 
+    def repair_publisher_enabled() -> bool:
+        return publisher_configured()
+
     @router.get("/config")
     async def testing_config(config: TestingConfig = Depends(require_testing_access)):
         return {
-            "stage": 4,
+            "stage": 5,
+            "repair_pr_publisher_enabled": repair_publisher_enabled(),
+            "repair_allowlisted_repo": os.getenv("TESTING_REPAIR_REPO", "") if repair_publisher_enabled() else None,
             "review_agents": [agent["role"] for agent in SPECIALISTS],
             "agent_ai_enabled": agent_llm_available(),
             "passive_security_enabled": passive_security_enabled(),
@@ -73,6 +100,143 @@ def create_testing_router(db, agent_provider=None, agent_model_name=None) -> API
     @router.get("/agents")
     async def get_testing_agents(config: TestingConfig = Depends(require_testing_access)):
         return list(SPECIALISTS)
+
+    @router.get("/repairs")
+    async def list_repairs(config: TestingConfig = Depends(require_testing_access)):
+        require_persistent_db()
+        try:
+            return await db.testing_repairs.find({}, {"_id": 0}).sort("created_at", -1).to_list(50)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to list repair cases.") from exc
+
+    @router.get("/repairs/{repair_id}")
+    async def get_repair(repair_id: str, config: TestingConfig = Depends(require_testing_access)):
+        require_persistent_db()
+        try:
+            case = await db.testing_repairs.find_one({"id": repair_id}, {"_id": 0})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to retrieve repair case.") from exc
+        if case is None:
+            raise HTTPException(status_code=404, detail="Repair case not found.")
+        return case
+
+    @router.post("/scans/{scan_id}/repairs", status_code=201)
+    async def create_repair(scan_id: str, payload: RepairCreate,
+                            config: TestingConfig = Depends(require_testing_access)):
+        require_persistent_db()
+        try:
+            scan = await db.testing_scans.find_one({"id": scan_id}, {"_id": 0})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to retrieve source scan.") from exc
+        if scan is None:
+            raise HTTPException(status_code=404, detail="Source scan not found.")
+        try:
+            case = build_repair_case(scan, payload.finding_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        case["coding_agent_prompt"] = repair_prompt(case)
+        try:
+            await db.testing_repairs.insert_one(dict(case))
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to save repair case.") from exc
+        return case
+
+    @router.post("/repairs/{repair_id}/verify")
+    async def verify_repair(repair_id: str, payload: RepairCompare,
+                            config: TestingConfig = Depends(require_testing_access)):
+        require_persistent_db()
+        try:
+            case = await db.testing_repairs.find_one({"id": repair_id}, {"_id": 0})
+            if case is None:
+                raise HTTPException(status_code=404, detail="Repair case not found.")
+            original = await db.testing_scans.find_one({"id": case["source_scan_id"]}, {"_id": 0})
+            latest = await db.testing_scans.find_one({"id": payload.retest_scan_id}, {"_id": 0})
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to load comparison scans.") from exc
+        if not original or not latest:
+            raise HTTPException(status_code=404, detail="A comparison scan was not found.")
+        try:
+            check = assess_retest(case, original, latest)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        # Append-only attempt evidence. This does NOT mark a patch as fixed.
+        try:
+            await db.testing_repairs.update_one(
+                {"id": repair_id},
+                {"$push": {"verification_history": check},
+                 "$set": {"latest_verification": check, "updated_at": timestamp()}},
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to persist comparison.") from exc
+        return check
+
+    @router.post("/repairs/{repair_id}/publish-pr", status_code=201)
+    async def publish_repair_pr(repair_id: str, payload: PublishRepair,
+                                x_repair_approval_token: str = Header(default=""),
+                                config: TestingConfig = Depends(require_testing_access)):
+        require_persistent_db()
+        if not repair_publisher_enabled():
+            raise HTTPException(status_code=503, detail="GitHub repair publishing is disabled.")
+        if not secrets.compare_digest(
+            x_repair_approval_token,
+            os.getenv("TESTING_REPAIR_APPROVAL_TOKEN", ""),
+        ):
+            raise HTTPException(status_code=403, detail="Separate repair approval required.")
+        if payload.approval_phrase != "CREATE DRAFT PR":
+            raise HTTPException(status_code=422, detail="Explicit approval phrase required.")
+        try:
+            validate_publishing_input(payload.repo, payload.file_path,
+                                      payload.expected_blob_sha, payload.new_source)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        try:
+            case = await db.testing_repairs.find_one({"id": repair_id}, {"_id": 0})
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to load repair case.") from exc
+        if not case:
+            raise HTTPException(status_code=404, detail="Repair case not found.")
+        if case["status"] != "proposed":
+            raise HTTPException(status_code=409, detail="Repair is not awaiting first publication.")
+        # Atomic single-use transition; stop parallel PR submissions.
+        try:
+            updated = await db.testing_repairs.update_one(
+                {"id": repair_id, "status": "proposed"},
+                {"$set": {"status": "publishing", "updated_at": timestamp()}},
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail="Unable to reserve publication.") from exc
+        if getattr(updated, "modified_count", 0) != 1:
+            raise HTTPException(status_code=409, detail="Repair publication already started.")
+        case["status"] = "publishing"
+        publisher = GitHubDraftPublisher(os.getenv("TESTING_GITHUB_TOKEN", ""))
+        try:
+            pr = await publisher.publish(case, payload.repo, payload.file_path,
+                                         payload.expected_blob_sha, payload.new_source)
+        except Exception as exc:
+            # Once a branch might exist, never retry automatically or hide it.
+            try:
+                await db.testing_repairs.update_one(
+                    {"id": repair_id, "status": "publishing"},
+                    {"$set": {"status": "publish_failed_reconcile",
+                              "publish_error": type(exc).__name__,
+                              "updated_at": timestamp()}},
+                )
+            except Exception:
+                pass
+            raise HTTPException(status_code=502,
+                                detail="Draft PR publication failed. Reconcile GitHub state manually before retry.") from exc
+        try:
+            await db.testing_repairs.update_one(
+                {"id": repair_id, "status": "publishing"},
+                {"$set": {"status": "draft_pr_opened", "pr": pr,
+                          "updated_at": timestamp()}},
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=503,
+                                detail="GitHub draft may exist but local state was not saved; manually reconcile.") from exc
+        return {"repair_id": repair_id, "pr": pr, "status": "draft_pr_opened"}
 
     @router.get("/scans")
     async def list_scans(config: TestingConfig = Depends(require_testing_access)):
