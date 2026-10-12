@@ -232,6 +232,8 @@ def workspace_router(db, dns_lookup=None):
     @router.post("/jobs", status_code=202)
     async def enqueue_job(data: JobRequest, scope=Depends(require_workspace)):
         ready()
+        if os.getenv("TESTING_CUSTOMER_JOB_SUBMISSION_ENABLED", "false").lower() != "true":
+            raise HTTPException(503, "Customer scan submission is disabled until the isolated worker is deployed.")
         if data.test_type != "availability":
             raise HTTPException(422,
                 "Customer jobs currently support HTTPS availability only. "
