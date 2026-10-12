@@ -151,4 +151,31 @@ Live staged acceptance (not yet executed):
    is disabled for customer access.
 8. Run supervised security review before expanding beyond the pilot.
 
+
+## Operator-run Stage 6A staging smoke
+
+Once BOTH separate pilot accounts, two workspaces, verified domain and
+actual isolated worker have been provisioned, run the following ONLY in the
+authorized staging network (never in PR CI). Export the environment
+variables below, preferably through a local secret manager or ephemeral
+shell session; do not paste real credentials into GitHub, ChatGPT or logs.
+
+- RAL6A_SCOPE_ACK=I_HAVE_AUTHORIZED_THE_STAGING_SITE_AND_ISOLATED_WORKER
+- RAL6A_STAGING_API=https://your-staging-api
+- RAL6A_AUTHORIZED_URL=https://your-authorized-staging-host/
+- RAL6A_WORKSPACE_A=<owner workspace identifier>
+- RAL6A_WORKSPACE_B=<second customer's distinct workspace identifier>
+- RAL6A_VERIFIED_DOMAIN_ID_A=<the verified domain id in workspace A>
+- RAL6A_USER_A_EMAIL and RAL6A_USER_A_PASSWORD
+- RAL6A_USER_B_EMAIL and RAL6A_USER_B_PASSWORD
+
+Then execute: python scripts/stage6a_staging_smoke.py
+
+It verifies that the second account gets 404 for the first customer's
+domains and scan history even with a guessed workspace ID; queues one
+owner-authorized HTTPS check; waits up to roughly a minute for the actual
+worker's TLS-verified response. This test must be run after deploy; it
+**has not been executed** in this PR. The script never runs exploit scans,
+deployments, penetration tests or any GitHub code writes.
+
 **DO NOT MERGE UNTIL OWNER APPROVAL AND DO NOT ENABLE PUBLIC CUSTOMER TESTING.**
