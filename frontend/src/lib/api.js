@@ -104,6 +104,36 @@ export const publishTestingRepairPR = (repairId, payload, token, approvalToken) 
   api.post("/testing/repairs/" + encodeURIComponent(repairId) + "/publish-pr",
     payload, { headers: { "X-Testing-Token": token, "X-Repair-Approval-Token": approvalToken } }).then(r => r.data);
 
+// ─── Stage 6A customer Testing Centre (separate from operator access) ───
+const customerHeaders = (token, workspaceId) => ({
+  headers: {
+    Authorization: "Bearer " + token,
+    ...(workspaceId ? { "X-Workspace-ID": workspaceId } : {}),
+  },
+});
+export const registerTestingAccount = (data) =>
+  api.post("/customer-testing/auth/register", data).then(r => r.data);
+export const loginTestingAccount = (data) =>
+  api.post("/customer-testing/auth/login", data).then(r => r.data);
+export const getCustomerTestingMe = (token) =>
+  api.get("/customer-testing/auth/me", customerHeaders(token)).then(r => r.data);
+export const getCustomerWorkspaces = (token) =>
+  api.get("/customer-testing/workspaces", customerHeaders(token)).then(r => r.data);
+export const createCustomerWorkspace = (name, token) =>
+  api.post("/customer-testing/workspaces", { name }, customerHeaders(token)).then(r => r.data);
+export const getCustomerDomains = (token, workspaceId) =>
+  api.get("/customer-testing/domains", customerHeaders(token, workspaceId)).then(r => r.data);
+export const addCustomerDomain = (hostname, token, workspaceId) =>
+  api.post("/customer-testing/domains", { hostname }, customerHeaders(token, workspaceId)).then(r => r.data);
+export const verifyCustomerDomain = (id, token, workspaceId) =>
+  api.post("/customer-testing/domains/" + encodeURIComponent(id) + "/verify",
+    {}, customerHeaders(token, workspaceId)).then(r => r.data);
+export const getCustomerJobs = (token, workspaceId) =>
+  api.get("/customer-testing/jobs", customerHeaders(token, workspaceId)).then(r => r.data);
+export const submitCustomerJob = (domainId, url, token, workspaceId) =>
+  api.post("/customer-testing/jobs", { domain_id: domainId, url, test_type: "availability" },
+    customerHeaders(token, workspaceId)).then(r => r.data);
+
 // ─── WebSocket ───
 export const getWsUrl = (projectId) => {
   const base = BACKEND_URL || window.location.origin.replace(":3000", ":12000");
