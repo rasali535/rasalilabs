@@ -15,6 +15,7 @@ import Models from "@/pages/Models";
 import Memory from "@/pages/Memory";
 import TestingCentre from "@/pages/TestingCentre";
 import WorkspaceTesting from "@/pages/WorkspaceTesting";
+import LegacyOperatorAccess from "@/components/LegacyOperatorAccess";
 
 function App() {
   return (
@@ -23,6 +24,7 @@ function App() {
         <Sidebar />
         <main className="flex-1 overflow-hidden">
           <Routes>
+            <Route element={<LegacyOperatorAccess />}>
             <Route path="/" element={<Dashboard />} />
             <Route path="/boardroom/:meetingId?" element={<Boardroom />} />
             <Route path="/dialogue" element={<Dialogue />} />
@@ -32,6 +34,7 @@ function App() {
             <Route path="/budget" element={<Budget />} />
             <Route path="/memory" element={<Memory />} />
             <Route path="/testing" element={<TestingCentre />} />
+            </Route>
             <Route path="/workspace-testing" element={<WorkspaceTesting />} />
             <Route path="/models" element={<Models />} />
             <Route path="*" element={<Navigate to="/" replace />} />

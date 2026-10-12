@@ -5,6 +5,39 @@ const API = `${BACKEND_URL}/api`;
 
 const api = axios.create({ baseURL: API });
 
+// Operator token is deliberately ephemeral: never persisted to localStorage,
+// cookies, URLs, or bundled source. Customer bearer auth remains independent.
+let legacyOperatorToken = "";
+let legacyOperatorGateRequired = false;
+
+export const setLegacyOperatorToken = (token) => { legacyOperatorToken = token || ""; };
+export const clearLegacyOperatorToken = () => { legacyOperatorToken = ""; };
+export const setLegacyOperatorGateRequired = (required) => { legacyOperatorGateRequired = Boolean(required); };
+export const getLegacyWsProtocols = () =>
+  legacyOperatorGateRequired && legacyOperatorToken
+    ? ["rasali-operator." + legacyOperatorToken]
+    : [];
+
+export const getLegacyAccessStatus = () =>
+  api.get("/legacy-access/status").then(r => r.data);
+export const checkLegacyOperatorToken = (token) =>
+  api.post("/legacy-access/check", {}, {
+    headers: { "X-Legacy-Operator-Token": token },
+  }).then(r => r.data);
+
+api.interceptors.request.use((config) => {
+  const path = config.url || "";
+  if (legacyOperatorToken &&
+      !path.startsWith("/customer-testing/") &&
+      !path.startsWith("/testing/") &&
+      !path.startsWith("/legacy-access/")) {
+    config.headers = config.headers || {};
+    config.headers["X-Legacy-Operator-Token"] = legacyOperatorToken;
+  }
+  return config;
+});
+
+
 api.interceptors.response.use(
   (response) => {
     if (typeof response.data === 'string' && response.data.trim().startsWith('<')) {
