@@ -4,9 +4,11 @@ Catches serverless/Render crashes caused by a missing top-level dependency.
 Do not run real scans, migrations, external network requests or startup hooks.
 """
 import importlib
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))  # direct script execution starts with scripts/ on sys.path
 source = (ROOT / "requirements.txt").read_text(encoding="utf-8")
 pins = {
     line.split("==", 1)[0].strip().lower()
