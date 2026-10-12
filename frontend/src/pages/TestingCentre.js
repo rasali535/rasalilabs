@@ -41,16 +41,21 @@ export default function TestingCentre() {
     setLoading(true);
     setErrorMessage("");
     try {
-      const [details, items] = await Promise.all([
-        getTestingConfig(providedToken),
-        getTestingScans(providedToken),
-      ]);
+      // Resolve the opt-in feature gate FIRST. A disabled/testing-only API
+      // returns 503; do not fire another scan-history request in parallel.
+      const details = await getTestingConfig(providedToken);
       setConfig(details);
+      const items = await getTestingScans(providedToken);
       setScans(items);
     } catch (error) {
       setConfig(null);
       setScans([]);
-      setErrorMessage(getError(error));
+      const status = error?.response?.status;
+      setErrorMessage(status === 503
+        ? "Operator Testing Centre is not enabled on this backend. Availability, browser and security scanning remain disabled until an isolated worker and approved target allowlist are configured."
+        : status === 403
+          ? "Testing token was not accepted. This token is separate from the private AI-agent operator login."
+          : getError(error));
     } finally {
       setLoading(false);
     }
@@ -113,7 +118,7 @@ export default function TestingCentre() {
           <div>
             <h1 className="font-['Chivo'] text-xl font-bold">Testing Centre</h1>
             <p className="text-xs text-zinc-500 mt-1">
-              Stage 3 · Development preview · Browser QA + passive security checks
+              Operator-only · Development preview · Guarded availability and browser checks
             </p>
           </div>
         </div>
@@ -128,7 +133,7 @@ export default function TestingCentre() {
               Availability, browser smoke checks and passive HTTPS security observations run
               only on approved destinations with operator access. Passive scans inspect one
               TLS connection and response headers. No attacks or penetration testing.
-              Domain ownership and customer accounts are not yet implemented.
+              Customer domain ownership and workspaces are managed separately under Workspaces.
             </p>
           </div>
         </div>
