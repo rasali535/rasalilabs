@@ -27,6 +27,11 @@ ALLOWED_TLS = {"TLSv1.2", "TLSv1.3"}
 
 def make_finding(code: str, severity: str, title: str, evidence: str,
                  recommendation: str, *, cwe: str, confidence: str = "high"):
+    # OWASP Top 10:2025 is a related risk category, NOT an assertion
+    # that this response proves the application is vulnerable.
+    owasp = ("A04:2025 Cryptographic Failures"
+             if code.startswith(("TLS_", "HSTS_", "COOKIE_SECURE_"))
+             else "A02:2025 Security Misconfiguration")
     return {
         "id": str(uuid.uuid4()),
         "code": code,
@@ -37,6 +42,7 @@ def make_finding(code: str, severity: str, title: str, evidence: str,
         "evidence": evidence[:240],
         "recommendation": recommendation,
         "cwe": cwe,
+        "owasp_top_10_2025_related": owasp,
         "confidence": confidence,
         "verified_by": "tls_and_http_response_headers",
     }
