@@ -113,6 +113,11 @@ def analyze_security_observation(data: dict) -> dict:
                 "No Referrer-Policy header on sampled HTML response.",
                 "Define an appropriate Referrer-Policy, e.g. strict-origin-when-cross-origin.",
                 "CWE-200", "medium")
+        if not has("permissions-policy"):
+            add("PERMISSIONS_POLICY_MISSING", "info", "Permissions Policy not observed",
+                "No Permissions-Policy header was seen on sampled HTML response.",
+                "Consider limiting unnecessary browser capabilities with Permissions-Policy.",
+                "CWE-693", "medium")
 
     for idx, cookie in enumerate(headers.get("set-cookie", [])[:12], start=1):
         # Do not include cookie names or values in findings or metadata.
@@ -141,6 +146,12 @@ def analyze_security_observation(data: dict) -> dict:
             "Use explicit trusted origins if credentialed CORS is required; browsers reject this combination.",
             "CWE-942", "high")
 
+    if api and not has("content-type"):
+        add("API_CONTENT_TYPE_MISSING", "low", "API response lacks a content type",
+            "No Content-Type header was seen for an /api/ path.",
+            "Return an accurate Content-Type and use nosniff for browser clients.",
+            "CWE-16", "medium")
+
     if api and has("cache-control"):
         policy = first("cache-control").lower()
         if "public" in policy and "no-store" not in policy:
@@ -161,10 +172,11 @@ def analyze_security_observation(data: dict) -> dict:
     low = sum(f["severity"] == "low" for f in findings)
     informational = sum(f["severity"] == "info" for f in findings)
     return {
-        "outcome": "warning" if high or medium or low else "pass",
+        "outcome": "warning" if high or medium or low or data.get("status", 200) >= 400 else "pass",
         "reachable": True,
         "audit_type": "passive_security",
         "http_status": data.get("status"),
+        "redirect_not_followed": 300 <= data.get("status", 0) < 400,
         "tls": tls,
         "findings": findings,
         "summary": {"findings": len(findings), "high": high, "medium": medium,
@@ -232,7 +244,7 @@ async def passive_security_audit(url: str, host: str, resolver=None, connector=N
     async def run():
         reader, writer = await connect(
             host=target_ip, port=443, ssl=ctx, server_hostname=host,
-            limit=MAX_HEADERS + 2048)
+            limit=MAX_HEADERS)
         try:
             ssl_obj = writer.get_extra_info("ssl_object")
             if ssl_obj is None:
@@ -257,17 +269,12 @@ async def passive_security_audit(url: str, host: str, resolver=None, connector=N
                        "Connection: close\r\n\r\n")
             writer.write(message.encode("ascii"))
             await writer.drain()
-            # Read one byte at a time? No: bounded 1024-byte chunks; do not
-            # retain or parse any body, even if it arrives in same TLS record.
-            buffer = bytearray()
-            while b"\r\n\r\n" not in buffer:
-                chunk = await reader.read(1024)
-                if not chunk:
-                    break
-                buffer.extend(chunk)
-                if len(buffer) > MAX_HEADERS:
-                    raise ValueError("Response headers exceeded safety limit.")
-            status, pairs = parse_headers(bytes(buffer))
+            # readuntil consumes exactly the header terminator, not body bytes.
+            # The asyncio stream reader enforces a bounded buffer limit.
+            buffer = await reader.readuntil(b"\r\n\r\n")
+            if len(buffer) > MAX_HEADERS:
+                raise ValueError("Response headers exceeded safety limit.")
+            status, pairs = parse_headers(buffer)
             return {"status": status, "headers": pairs,
                     "tls": tls, "path": parts.path or "/"}
         finally:
@@ -280,7 +287,8 @@ async def passive_security_audit(url: str, host: str, resolver=None, connector=N
         report["latency_ms"] = round((time.monotonic() - started) * 1000)
         report["completed_at"] = datetime.now(timezone.utc).isoformat()
         return report
-    except (OSError, ValueError, ssl.SSLError, asyncio.TimeoutError) as exc:
+    except (OSError, ValueError, ssl.SSLError, asyncio.TimeoutError,
+            asyncio.LimitOverrunError, asyncio.IncompleteReadError) as exc:
         # A TLS verification failure is not a validated handshake; do not
         # declare any header checks passed, and do not expose full exception.
         return {
