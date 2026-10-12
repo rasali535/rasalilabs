@@ -92,6 +92,17 @@ export const getTestingReviews = (scanId, token) =>
   api.get(`/testing/scans/${encodeURIComponent(scanId)}/reviews`, testingHeaders(token)).then(r => Array.isArray(r.data) ? r.data : []);
 export const createTestingReview = (scanId, useAi, token) =>
   api.post(`/testing/scans/${encodeURIComponent(scanId)}/reviews`, { use_ai: useAi }, testingHeaders(token)).then(r => r.data);
+export const getTestingRepairs = (token) =>
+  api.get("/testing/repairs", testingHeaders(token)).then(r => Array.isArray(r.data) ? r.data : []);
+export const createTestingRepair = (scanId, findingId, token) =>
+  api.post("/testing/scans/" + encodeURIComponent(scanId) + "/repairs",
+    { finding_id: findingId }, testingHeaders(token)).then(r => r.data);
+export const verifyTestingRepair = (repairId, retestScanId, token) =>
+  api.post("/testing/repairs/" + encodeURIComponent(repairId) + "/verify",
+    { retest_scan_id: retestScanId }, testingHeaders(token)).then(r => r.data);
+export const publishTestingRepairPR = (repairId, payload, token, approvalToken) =>
+  api.post("/testing/repairs/" + encodeURIComponent(repairId) + "/publish-pr",
+    payload, { headers: { "X-Testing-Token": token, "X-Repair-Approval-Token": approvalToken } }).then(r => r.data);
 
 // ─── WebSocket ───
 export const getWsUrl = (projectId) => {
