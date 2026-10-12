@@ -26,6 +26,8 @@ Stage 1–4 scanners/reviewers.
    - still_observed — same issue signature still appears;
    - not_observed_in_retest — issue signature was not seen, but the result
      **does not prove the code was fixed or certify the application**;
+   - regression_warning — source signature disappeared but new high-
+     severity findings were observed in the comparison scan;
    - inconclusive — equivalent test coverage was not established.
 
 For browsers, all three viewport navigations and document metrics must
