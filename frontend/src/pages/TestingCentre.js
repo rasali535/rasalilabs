@@ -108,7 +108,7 @@ export default function TestingCentre() {
 
   const submitScan = async (event) => {
     event.preventDefault();
-    if (!token.trim() || !url.trim() || busy) return;
+    if (!token.trim() || !url.trim() || busy || !config?.scan_execution_enabled) return;
     setBusy(true);
     setErrorMessage("");
     try {
@@ -188,6 +188,12 @@ export default function TestingCentre() {
               <p className="text-xs text-zinc-400">
                 Availability method: verified TLS + IP-pinned HTTPS HEAD only.
               </p>
+              {readiness.mode === "operator_configured" && !readiness.scan_execution_enabled && (
+                <p className="text-xs text-amber-200">
+                  Operator history and specialist reviews are available after unlocking.
+                  Live scan execution remains locked until isolated worker deployment.
+                </p>
+              )}
               {readiness.mode !== "operator_configured" && (
                 <p className="text-xs text-amber-200">
                   No live scans can run yet. An operator must enable the preview,
@@ -271,6 +277,12 @@ export default function TestingCentre() {
                   </option>
                 </select>
               </div>
+              {!config.scan_execution_enabled && (
+                <p className="text-xs text-amber-200 mb-3" role="status">
+                  Read-only preview: stored results are available, but new network checks
+                  cannot run until the execution safety gate is approved.
+                </p>
+              )}
               <form onSubmit={submitScan} className="flex flex-col sm:flex-row gap-2">
                 <label className="sr-only" htmlFor="testing-url">Approved website URL</label>
                 <input
@@ -285,8 +297,8 @@ export default function TestingCentre() {
                 />
                 <button
                   type="submit"
-                  disabled={busy}
-                  className="btn-primary px-5 py-2.5 text-sm flex items-center justify-center gap-2 shrink-0"
+                  disabled={busy || !config.scan_execution_enabled}
+                  className="btn-primary px-5 py-2.5 text-sm flex items-center justify-center gap-2 shrink-0 disabled:opacity-50"
                   data-testid="testing-start-scan"
                 >
                   {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
