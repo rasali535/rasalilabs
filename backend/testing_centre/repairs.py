@@ -64,6 +64,12 @@ def comparable(scan, test_type, source_coverage):
     if not _successful_scan(scan) or scan.get("test_type") != test_type:
         return False
     result = scan["result"]
+    inventory = result.get("findings")
+    # Source scanners cap browser findings at 60 and passive security at 25.
+    # A result AT its cap could be truncated, so absence is not proof.
+    max_findings = 60 if test_type == "browser_smoke" else 25
+    if not isinstance(inventory, list) or len(inventory) >= max_findings:
+        return False
     if test_type == "browser_smoke":
         # Require all three usable viewport navigations, regardless of the issue
         # viewport. Block misleading 'not reproduced' after partial failures.
@@ -164,7 +170,7 @@ def assess_retest(case, original, latest):
     if not source_ok or not latest_ok:
         return observation
     findings = (latest.get("result") or {}).get("findings")
-    if not isinstance(findings, list) or len(findings) > 60:
+    if not isinstance(findings, list):
         observation["reason"] = "Retest finding inventory is missing or truncated."
         return observation
     if any(_observation_key(x, case["test_type"]) == origin_key for x in findings if isinstance(x, dict)):
