@@ -151,8 +151,13 @@ def assess_retest(case, original, latest):
         raise ValueError("Retest URL and scan profile must exactly match the original.")
     if original.get("id") != case.get("source_scan_id"):
         raise ValueError("Original scan does not match repair evidence.")
-    if latest.get("created_at", "") <= original.get("created_at", ""):
-        raise ValueError("Retest must be newer than the original scan.")
+    try:
+        base_time = datetime.fromisoformat(original["created_at"])
+        retest_time = datetime.fromisoformat(latest["created_at"])
+        if base_time.tzinfo is None or retest_time.tzinfo is None or retest_time <= base_time:
+            raise ValueError("Retest must be newer than the original scan.")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("Retest must have a valid later timestamp.") from exc
     origin_key = tuple(case["issue_key"])
     source_coverage = case.get("baseline_coverage")
     source_ok = comparable(original, case["test_type"], source_coverage)
@@ -177,9 +182,33 @@ def assess_retest(case, original, latest):
         observation.update(result="still_observed",
                            reason="The original finding signature is present in the comparable retest.")
         return observation
-    observation.update(result="not_observed_in_retest",
-                       reason="This finding signature was not seen in a comparable retest. "
-                              "That does not prove code was repaired or certify the app.")
+    base_keys = {
+        _observation_key(item, case["test_type"])
+        for item in (original.get("result") or {}).get("findings", [])
+        if isinstance(item, dict)
+    }
+    new_high = sum(
+        1 for item in findings
+        if isinstance(item, dict) and item.get("severity") == "high"
+        and _observation_key(item, case["test_type"]) not in base_keys
+    )
+    observation["new_high_observations"] = new_high
+    if new_high:
+        observation.update(
+            result="regression_warning",
+            reason=(
+                "The original signature was not observed, but new high-severity "
+                "findings appeared in the comparable retest. Further investigation required."
+            ),
+        )
+    else:
+        observation.update(
+            result="not_observed_in_retest",
+            reason=(
+                "This finding signature was not seen in a comparable retest. "
+                "That does not prove code was repaired or certify the app."
+            ),
+        )
     return observation
 
 
