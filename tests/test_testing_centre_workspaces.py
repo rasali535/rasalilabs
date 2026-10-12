@@ -106,6 +106,7 @@ def setup(monkeypatch, *, signup=True):
     monkeypatch.setenv("TESTING_WORKSPACE_JWT_SECRET", JWT_SECRET)
     monkeypatch.setenv("TESTING_WORKSPACE_SIGNUP_ENABLED", "true" if signup else "false")
     monkeypatch.setenv("TESTING_WORKSPACE_INVITE_SECRET", INVITE)
+    monkeypatch.setenv("TESTING_CUSTOMER_JOB_SUBMISSION_ENABLED", "true")
 
 
 def create_client(db, dns=None):
