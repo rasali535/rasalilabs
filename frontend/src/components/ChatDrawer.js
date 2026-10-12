@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { MessageCircle, X, Send, ChevronDown } from "lucide-react";
-import { AGENT_META, BACKEND_URL } from "@/lib/api";
+import { AGENT_META, chatWithAgent, getChatHistory } from "@/lib/api";
 import AgentAvatar from "@/components/AgentAvatar";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import axios from "axios";
 
 export default function ChatDrawer() {
   const [open, setOpen] = useState(false);
@@ -16,8 +15,8 @@ export default function ChatDrawer() {
 
   const loadHistory = useCallback(async () => {
     try {
-      const res = await axios.get(`${BACKEND_URL}/api/chat/history`);
-      setChatMessages(res.data.reverse());
+      const history = await getChatHistory();
+      setChatMessages(Array.isArray(history) ? [...history].reverse() : []);
     } catch (e) {
       console.error(e);
     }
@@ -50,15 +49,15 @@ export default function ChatDrawer() {
     setChatMessages((prev) => [...prev, tempUserMsg]);
 
     try {
-      const res = await axios.post(`${BACKEND_URL}/api/chat`, {
+      const result = await chatWithAgent({
         to_agent: selectedAgent,
         content: userMsg,
       });
       // Replace temp message and add agent response
       setChatMessages((prev) => [
         ...prev.filter((m) => m.id !== tempUserMsg.id),
-        res.data.user_message,
-        res.data.agent_response,
+        result.user_message,
+        result.agent_response,
       ]);
     } catch (e) {
       console.error(e);
