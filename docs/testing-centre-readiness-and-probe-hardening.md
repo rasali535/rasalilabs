@@ -85,3 +85,27 @@ not a general browser/penetration testing runner. Its declared
   real, operator-authorized job receipt and results after deployment.
 
 **PR branch only. No merge, customer activation, or Render deploy included.**
+
+## Read-only operator preview (additional hard gate)
+
+The new `TESTING_SCAN_EXECUTION_ENABLED` setting **defaults to false**.
+With `TESTING_CENTRE_ENABLED=true`, a unique dedicated 48+ character
+`TESTING_ACCESS_TOKEN`, authorized `TESTING_ALLOWED_HOSTS`, and persistent
+MongoDB configured, an operator can unlock and browse scan history, QA
+reviews and repair records. **All POST /scans requests then return 503
+before DNS or external network access.** The React Run check button is
+also disabled. This is the recommended initial operator staging configuration.
+
+Do **not** set `TESTING_SCAN_EXECUTION_ENABLED=true` on the shared Render API.
+It would unlock legacy in-process network execution; the flag does not
+create a firewall or separated worker. A separately deployed, audited
+network-isolated worker is required before activating real checks.
+
+For the read-only preview, leave browser, passive-security, agent AI,
+GitHub publishing and customer-job execution switches disabled. The
+`/api/testing/status` response will show `operator_configured` but
+`scan_execution_enabled: false`; this is expected and safe.
+
+Acceptance: operator token grants config/history, wrong token returns 403,
+and all availability/browser/passive POST attempts return 503 with no
+request or scan record. Historical records are not reclassified as verified.
