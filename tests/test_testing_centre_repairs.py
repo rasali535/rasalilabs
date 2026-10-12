@@ -98,6 +98,28 @@ def test_retest_ids_change_but_signature_comparison_is_deterministic():
     assert missing["release_readiness"] == "not_verified"
 
 
+def test_new_high_severity_observation_blocks_retest_green():
+    original = scan()
+    case = build_repair_case(original, "f1")
+    later = scan(scan_id="s2", include=False, date="2026-10-12T09:00:00+00:00")
+    later["result"]["findings"] = [{
+        "id": "new-regression", "title": "New broken checkout",
+        "category": "functional", "severity": "high", "viewport": "desktop",
+    }]
+    compared = assess_retest(case, original, later)
+    assert compared["result"] == "regression_warning"
+    assert compared["new_high_observations"] == 1
+    assert compared["fix_verified"] is False
+
+
+def test_timezone_offsets_cannot_make_older_retest_look_newer():
+    original = scan()
+    case = build_repair_case(original, "f1")
+    later = scan(scan_id="s2", include=False, date="2026-10-12T09:00:00+02:00")
+    with pytest.raises(ValueError):
+        assess_retest(case, original, later)
+
+
 def test_broken_mobile_or_changed_test_type_does_not_pass():
     original = scan()
     case = build_repair_case(original, "f1")
