@@ -1,6 +1,11 @@
 import axios from "axios";
 
-export const BACKEND_URL = process.env.REACT_APP_BACKEND_URL || (window.location.origin.includes("vercel.app") ? "https://rasalilabs.onrender.com" : window.location.origin.replace(":3000", ":4001"));
+// The API runs on the secured Ras Ali Labs Render service, NOT the old Render
+// account and NOT the publicly routed Vercel Python function.
+// For future production migration, configure REACT_APP_BACKEND_URL explicitly
+// at build time. No credentials belong in this public frontend variable.
+const configuredBackend = (process.env.REACT_APP_BACKEND_URL || "").trim().replace(/\\/+$/, "");
+export const BACKEND_URL = configuredBackend || "https://rasalilabs-api-staging.onrender.com";
 const API = `${BACKEND_URL}/api`;
 
 const api = axios.create({ baseURL: API });
