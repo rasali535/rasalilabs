@@ -13,6 +13,7 @@ import {
   Image as ImageIcon,
 } from "lucide-react";
 import { createTestingScan, getTestingConfig, getTestingScans, getTestingEvidence } from "@/lib/api";
+import SecurityReport from "@/components/SecurityReport";
 
 const getError = (error) => {
   const detail = error?.response?.data?.detail;
@@ -110,7 +111,7 @@ export default function TestingCentre() {
           <div>
             <h1 className="font-['Chivo'] text-xl font-bold">Testing Centre</h1>
             <p className="text-xs text-zinc-500 mt-1">
-              Stage 2 · Development preview · Live browser diagnostics
+              Stage 3 · Development preview · Browser QA + passive security checks
             </p>
           </div>
         </div>
@@ -122,9 +123,10 @@ export default function TestingCentre() {
           <div>
             <p className="text-sm font-medium text-amber-100">Not a security certification or penetration test</p>
             <p className="text-xs text-amber-200/70 mt-1 leading-5">
-              Availability checks are available, with optional isolated Playwright browser
-              smoke tests. These are read-only observations of an approved URL, not penetration testing.
-              We do not verify ownership, execute login journeys or certify security.
+              Availability, browser smoke checks and passive HTTPS security observations run
+              only on approved destinations with operator access. Passive scans inspect one
+              TLS connection and response headers. No attacks or penetration testing.
+              Domain ownership and customer accounts are not yet implemented.
             </p>
           </div>
         </div>
@@ -178,7 +180,7 @@ export default function TestingCentre() {
             <section className="border border-[#252525] rounded-lg p-4 sm:p-5 bg-[#111111]" aria-label="New scan">
               <div className="flex items-center gap-2 mb-3">
                 <Globe className="w-4 h-4 text-blue-400" aria-hidden="true" />
-                <h2 className="font-semibold text-sm">New availability check</h2>
+                <h2 className="font-semibold text-sm">New application check</h2>
               </div>
               <div className="mb-3">
                 <label htmlFor="testing-mode" className="block text-xs text-zinc-400 mb-1">Test profile</label>
@@ -192,6 +194,9 @@ export default function TestingCentre() {
                   <option value="availability">Availability check (HTTP)</option>
                   <option value="browser_smoke" disabled={!config.browser_enabled}>
                     Live browser QA (desktop, tablet, mobile){config.browser_enabled ? "" : " — worker not enabled"}
+                  </option>
+                  <option value="passive_security" disabled={!config.passive_security_enabled}>
+                    Passive security (HTTPS/TLS, headers, cookies, API signals){config.passive_security_enabled ? "" : " — worker not enabled"}
                   </option>
                 </select>
               </div>
@@ -253,7 +258,7 @@ export default function TestingCentre() {
                     >
                       <span className="block text-sm truncate">{scan.host}</span>
                       <span className="block text-xs text-zinc-500 mt-1">
-                        {scan.test_type === "browser_smoke" ? "Browser QA" : "HTTP"} · {scan.status} · {new Date(scan.created_at).toLocaleString()}
+                        {scan.test_type === "browser_smoke" ? "Browser QA" : scan.test_type === "passive_security" ? "Passive Security" : "HTTP"} · {scan.status} · {new Date(scan.created_at).toLocaleString()}
                       </span>
                     </button>
                   ))}
@@ -309,6 +314,7 @@ export default function TestingCentre() {
                     {active.result?.error && (
                       <p className="text-xs text-rose-300">Network check failed: {active.result.error}</p>
                     )}
+                    {active.test_type === "passive_security" && <SecurityReport report={active.result} />}
                     {active.test_type === "browser_smoke" && (
                       <div className="space-y-4 border-t border-[#282828] pt-4">
                         <div>
