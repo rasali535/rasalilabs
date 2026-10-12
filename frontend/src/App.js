@@ -14,6 +14,7 @@ import Budget from "@/pages/Budget";
 import Models from "@/pages/Models";
 import Memory from "@/pages/Memory";
 import TestingCentre from "@/pages/TestingCentre";
+import WorkspaceTesting from "@/pages/WorkspaceTesting";
 
 function App() {
   return (
@@ -31,6 +32,7 @@ function App() {
             <Route path="/budget" element={<Budget />} />
             <Route path="/memory" element={<Memory />} />
             <Route path="/testing" element={<TestingCentre />} />
+            <Route path="/workspace-testing" element={<WorkspaceTesting />} />
             <Route path="/models" element={<Models />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
