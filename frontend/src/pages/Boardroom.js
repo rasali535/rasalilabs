@@ -20,6 +20,7 @@ import {
   executeProject,
   getProjects,
   getWsUrl,
+  getLegacyWsProtocols,
   AGENT_META,
 } from "@/lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -78,7 +79,7 @@ export default function Boardroom() {
     const wsUrl = getWsUrl(activeMeeting.project_id);
     let ws;
     try {
-      ws = new WebSocket(wsUrl);
+      ws = new WebSocket(wsUrl, getLegacyWsProtocols());
       wsRef.current = ws;
 
       ws.onopen = () => {
